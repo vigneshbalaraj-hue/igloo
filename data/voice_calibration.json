@@ -1,0 +1,18 @@
+{
+  "_comment": "Per-voice words-per-second calibration. Auto-updated by generate_voiceover.py after every successful run. Seeded from session 19 measurements.",
+  "_default_wps": 2.5,
+  "_max_samples": 20,
+  "voices": {
+    "2W8HrWcBFzCEf5cQQdIL": {
+      "name": "Hanuman",
+      "measured_wps": 1.9,
+      "samples": [
+        1.9,
+        1.9,
+        1.9
+      ],
+      "last_updated": "2026-04-07",
+      "notes": "Slow narration voice, deliberate pacing. Three converging measurements from session 19."
+    }
+  }
+}

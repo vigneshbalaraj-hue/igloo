@@ -1,45 +1,141 @@
 """
 generate_voiceover.py — Generate voice-over audio with word-level timestamps via ElevenLabs API.
 
+Voice prompt bank wired in (session 20):
+  - TTS voice_settings come from each scene's PHASE field (HOOK / AGITATION / REFRAME / CTA),
+    not its `voice_emotion` field. Phase profiles from voice_prompt_bank.md Part 2.
+  - Narration text is annotated per voice_prompt_bank.md Part 3 before the TTS call:
+    universal cleanup of banned chars + per-phase beat/pacing rules.
+  - Voice is ALWAYS generated at 1.0x. The 1.2x reel pacing is applied at the end of
+    assemble_video.py via ffmpeg setpts+atempo (pitch-preserving), not via the
+    ElevenLabs `speed` parameter (which caps at 1.2x and degrades quality).
+
 Supports two modes:
-  - Scene-by-scene (default): generates each scene separately with per-scene emotion settings,
-    then concatenates via ffmpeg. Produces more expressive, natural-sounding voiceovers.
-  - Single-pass (--single): generates the full script in one API call. Faster but monotone.
+  - Scene-by-scene (default): generates each scene separately with phase-aware settings.
+  - Single-pass (--single): generates the full script in one API call (legacy, monotone).
 
 Usage:
-    py execution/generate_voiceover.py .tmp/.../script.json --speed 1.15
-    py execution/generate_voiceover.py .tmp/.../script.json --speed 1.15 --single
-    py execution/generate_voiceover.py .tmp/.../script.json --speed 1.15 --gap 250
+    py execution/generate_voiceover.py .tmp/.../script.json
+    py execution/generate_voiceover.py .tmp/.../script.json --gap 250
 
 Output:
-    {script_dir}/voiceover.mp3              — final concatenated audio
+    {script_dir}/voiceover.mp3               — final concatenated audio (1.0x)
     {script_dir}/voiceover_timestamps.json   — character-level timestamps (merged)
-    {script_dir}/voiceover_scenes/           — per-scene audio files (scene-by-scene mode)
+    {script_dir}/voiceover_scenes/           — per-scene audio files
+    {script_dir}/voiceover_annotated.json    — per-scene phase + annotated text log
 """
 
 import argparse
 import base64
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
+# Local — shared with generate_script.py for voice calibration
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import prompt_bank as pb  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
-# Emotion presets — map to ElevenLabs voice_settings
+# Phase TTS profiles — voice_prompt_bank.md Part 2
 # ---------------------------------------------------------------------------
 
-EMOTION_PRESETS = {
-    "firm":          {"stability": 0.40, "similarity_boost": 0.70, "style": 0.85},
-    "urgent":        {"stability": 0.35, "similarity_boost": 0.65, "style": 0.90},
-    "contemplative": {"stability": 0.50, "similarity_boost": 0.75, "style": 0.75},
-    "informative":   {"stability": 0.50, "similarity_boost": 0.70, "style": 0.80},
-    "warm":          {"stability": 0.55, "similarity_boost": 0.75, "style": 0.80},
-    "reassuring":    {"stability": 0.50, "similarity_boost": 0.70, "style": 0.85},
-    "gentle":        {"stability": 0.55, "similarity_boost": 0.75, "style": 0.75},
-    "confident":     {"stability": 0.45, "similarity_boost": 0.70, "style": 0.85},
-    "default":       {"stability": 0.45, "similarity_boost": 0.70, "style": 0.80},
+PHASE_TTS = {
+    "HOOK": {
+        "stability": 0.35,
+        "similarity_boost": 0.75,
+        "style": 0.70,
+        "use_speaker_boost": True,
+    },
+    "AGITATION": {
+        "stability": 0.40,
+        "similarity_boost": 0.75,
+        "style": 0.65,
+        "use_speaker_boost": True,
+    },
+    "REFRAME": {
+        "stability": 0.30,
+        "similarity_boost": 0.75,
+        "style": 0.75,
+        "use_speaker_boost": True,
+    },
+    "CTA": {
+        "stability": 0.50,
+        "similarity_boost": 0.75,
+        "style": 0.55,
+        "use_speaker_boost": True,
+    },
 }
+
+DEFAULT_PHASE = "AGITATION"  # fallback for scenes without a `purpose` field
+
+
+# ---------------------------------------------------------------------------
+# Annotation rules — voice_prompt_bank.md Part 3
+# ---------------------------------------------------------------------------
+
+BANNED_CHARS = ["!", "*", "(", ")", ";"]
+
+
+def universal_clean(text: str) -> str:
+    """Strip Part 3 banned chars and collapse double spaces."""
+    for ch in BANNED_CHARS:
+        text = text.replace(ch, "")
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    return text
+
+
+def annotate_hook(text: str) -> str:
+    """Add `...` after first clause if not already present.
+
+    Heuristic: if text contains `?`, leave as-is (rhetorical questions already
+    create the beat). Otherwise insert `...` after the first comma if it sits
+    in the first 50 chars; else after the first 8 words.
+    """
+    if "..." in text or "?" in text:
+        return text
+    first_comma = text.find(",")
+    if 0 < first_comma < 50:
+        return text[:first_comma] + "..." + text[first_comma + 1:]
+    words = text.split()
+    if len(words) > 8:
+        return " ".join(words[:8]) + "... " + " ".join(words[8:])
+    return text
+
+
+def annotate_agitation(text: str) -> str:
+    """No-op. Script-bank-generated agitation already uses commas well."""
+    return text
+
+
+def annotate_reframe(text: str) -> str:
+    """Force beats: turn clause-joining commas into periods on the payload section."""
+    return re.sub(
+        r",\s+(but|and|not|yet|so)\b",
+        lambda m: ". " + m.group(1).capitalize(),
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
+def annotate_cta(text: str) -> str:
+    """Strip ellipses; CTA must be definitive."""
+    return text.replace("...", " ").replace("…", " ")
+
+
+ANNOTATORS = {
+    "HOOK": annotate_hook,
+    "AGITATION": annotate_agitation,
+    "REFRAME": annotate_reframe,
+    "CTA": annotate_cta,
+}
+
+
+def annotate(text: str, phase: str) -> str:
+    cleaned = universal_clean(text)
+    return ANNOTATORS.get(phase, annotate_agitation)(cleaned)
 
 
 def load_env(key: str) -> str:
@@ -93,24 +189,28 @@ def get_audio_duration_s(filepath: str) -> float:
 # ElevenLabs TTS — single scene
 # ---------------------------------------------------------------------------
 
-def generate_scene_audio(text: str, voice_id: str, api_key: str, emotion: str,
-                         speed: float, output_path: Path) -> dict:
-    """Generate TTS for a single text segment. Returns alignment dict."""
+def generate_scene_audio(text: str, voice_id: str, api_key: str, settings: dict,
+                         output_path: Path) -> dict:
+    """Generate TTS for a single text segment at 1.0x. Returns alignment dict.
+
+    `settings` is a phase TTS profile (e.g. PHASE_TTS["HOOK"]). Speed is NOT sent
+    to the API — final reel pacing is handled by assemble_video.py via ffmpeg
+    setpts+atempo. The ElevenLabs speed param degrades voice quality and caps at
+    1.2x, so we generate clean 1.0x audio and time-stretch downstream.
+    """
     import urllib.request
     import urllib.error
 
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/with-timestamps"
 
-    settings = EMOTION_PRESETS.get(emotion, EMOTION_PRESETS["default"]).copy()
-    settings["use_speaker_boost"] = True
+    settings = dict(settings)  # don't mutate caller's dict
+    settings.setdefault("use_speaker_boost", True)
 
     payload = {
         "text": text,
         "model_id": "eleven_turbo_v2_5",
         "voice_settings": settings,
     }
-    if speed != 1.0:
-        payload["speed"] = speed
 
     data = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data, method="POST")
@@ -142,24 +242,36 @@ def generate_scene_audio(text: str, voice_id: str, api_key: str, emotion: str,
 # Extract scenes from script JSON
 # ---------------------------------------------------------------------------
 
+def _normalize_phase(raw: str) -> str:
+    """Coerce a scene's `purpose` field to a known phase, defaulting if absent/unknown."""
+    if not raw:
+        return DEFAULT_PHASE
+    p = raw.strip().upper()
+    return p if p in PHASE_TTS else DEFAULT_PHASE
+
+
 def extract_narration_segments(script: dict) -> list:
-    """Extract ordered narration segments from script, handling sub-clips."""
+    """Extract ordered narration segments from script, handling sub-clips.
+
+    Each segment carries its phase (HOOK/AGITATION/REFRAME/CTA), derived from
+    the scene's `purpose` field. Sub-clips inherit the parent scene's phase.
+    """
     segments = []
     for scene in script.get("scenes", []):
         vid = scene.get("video_generation", {})
-        emotion = scene.get("voice_emotion", "default")
+        phase = _normalize_phase(scene.get("purpose", ""))
 
         # Check for sub-clips (e.g., scene 4 with clips 4a, 4b)
         if "clips" in vid:
             for clip in vid["clips"]:
                 text = clip.get("narration_text", "")
                 clip_id = clip.get("clip_id", "")
-                clip_emotion = clip.get("voice_emotion", emotion)
+                clip_phase = _normalize_phase(clip.get("purpose", "")) if clip.get("purpose") else phase
                 if text.strip():
                     segments.append({
                         "id": f"scene{scene['scene_id']}_{clip_id}",
                         "text": text.strip(),
-                        "emotion": clip_emotion,
+                        "phase": clip_phase,
                     })
         else:
             text = scene.get("narration_text", "")
@@ -167,7 +279,7 @@ def extract_narration_segments(script: dict) -> list:
                 segments.append({
                     "id": f"scene{scene['scene_id']}",
                     "text": text.strip(),
-                    "emotion": emotion,
+                    "phase": phase,
                 })
     return segments
 
@@ -177,8 +289,8 @@ def extract_narration_segments(script: dict) -> list:
 # ---------------------------------------------------------------------------
 
 def generate_scene_by_scene(script: dict, voice_id: str, api_key: str,
-                            output_dir: Path, speed: float, gap_ms: int):
-    """Generate each scene separately, concatenate with ffmpeg."""
+                            output_dir: Path, gap_ms: int):
+    """Generate each scene separately at 1.0x, concatenate with ffmpeg."""
     segments = extract_narration_segments(script)
     if not segments:
         print("ERROR: No narration segments found", file=sys.stderr)
@@ -200,31 +312,45 @@ def generate_scene_by_scene(script: dict, voice_id: str, api_key: str,
     # Generate each segment
     scene_files = []
     all_alignments = []
+    annotated_log = []
     cumulative_offset = 0.0
 
-    print(f"\nGenerating {len(segments)} scene segments (voice: {voice_id[:12]}..., speed: {speed}x)")
+    print(f"\nGenerating {len(segments)} scene segments at 1.0x (voice: {voice_id[:12]}...)")
     print(f"{'='*60}")
 
     for i, seg in enumerate(segments):
         scene_path = scenes_dir / f"{seg['id']}.mp3"
-        emotion = seg["emotion"]
-        settings = EMOTION_PRESETS.get(emotion, EMOTION_PRESETS["default"])
+        phase = seg["phase"]
+        settings = PHASE_TTS[phase]
+        original_text = seg["text"]
+        annotated_text = annotate(original_text, phase)
 
-        print(f"  [{i+1}/{len(segments)}] {seg['id']} ({emotion}) — \"{seg['text'][:50]}...\"")
-        print(f"           stability={settings['stability']}, style={settings['style']}")
+        print(f"  [{i+1}/{len(segments)}] {seg['id']} phase={phase}")
+        print(f"           stab={settings['stability']} style={settings['style']}")
+        print(f"           text: \"{annotated_text[:60]}...\"")
+        if annotated_text != original_text:
+            print(f"           (annotated from original)")
 
         alignment = generate_scene_audio(
-            text=seg["text"],
+            text=annotated_text,
             voice_id=voice_id,
             api_key=api_key,
-            emotion=emotion,
-            speed=speed,
+            settings=settings,
             output_path=scene_path,
         )
 
         # Get actual duration via ffprobe
         duration = get_audio_duration_s(str(scene_path))
         print(f"           duration={duration:.2f}s")
+
+        annotated_log.append({
+            "id": seg["id"],
+            "phase": phase,
+            "tts_settings": settings,
+            "original_text": original_text,
+            "annotated_text": annotated_text,
+            "duration_s": round(duration, 3),
+        })
 
         # Offset alignment timestamps
         chars = alignment.get("characters", [])
@@ -268,6 +394,11 @@ def generate_scene_by_scene(script: dict, voice_id: str, api_key: str,
     with open(ts_path, "w", encoding="utf-8") as f:
         json.dump(merged, f, indent=2, ensure_ascii=False)
 
+    # Persist annotation log for debugging/audit
+    log_path = output_dir / "voiceover_annotated.json"
+    with open(log_path, "w", encoding="utf-8") as f:
+        json.dump(annotated_log, f, indent=2, ensure_ascii=False)
+
     # Concatenate with ffmpeg
     print(f"\nConcatenating {len(scene_files)} files...")
     concat_list = scenes_dir / "concat.txt"
@@ -289,8 +420,43 @@ def generate_scene_by_scene(script: dict, voice_id: str, api_key: str,
     print(f"\n{'='*60}")
     print(f"Audio saved: {audio_path} ({file_size:.1f} KB)")
     print(f"Timestamps saved: {ts_path}")
+    print(f"Annotation log: {log_path}")
     print(f"Audio duration: ~{total_duration:.1f}s")
     print(f"Scene audio: {scenes_dir}/")
+
+    # Auto-update voice calibration: every successful run feeds a fresh
+    # words-per-second sample back into data/voice_calibration.json. After
+    # ~3 samples the rolling mean converges, so adding a new voice is
+    # zero-config — first run uses DEFAULT_WPS, subsequent runs self-correct.
+    total_words = sum(
+        len(entry["original_text"].split()) for entry in annotated_log
+    )
+    if total_words > 0 and total_duration > 0:
+        sample_wps = total_words / total_duration
+        new_mean = pb.update_voice_wps(voice_id, sample_wps)
+        print(
+            f"  [calibration] sample={sample_wps:.2f} wps "
+            f"(words={total_words}, dur={total_duration:.1f}s) "
+            f"→ rolling mean={new_mean:.3f}"
+        )
+
+    # Duration sanity check vs the script's target duration. The band is
+    # tight now that calibration is wired — outside [0.92, 1.08] means the
+    # script genuinely overshot/undershot, not "voice runs slow."
+    target = (
+        script.get("target_duration_seconds")
+        or script.get("duration_seconds")
+        or (script.get("_meta") or {}).get("duration_target_s")
+    )
+    if target:
+        ratio = total_duration / float(target)
+        if ratio > 1.08 or ratio < 0.92:
+            print(
+                f"\n  WARNING: actual duration {total_duration:.1f}s vs target {target}s "
+                f"(ratio {ratio:.2f}). Outside the 0.92-1.08 calibrated band — "
+                f"the script word count is wrong for this voice.",
+                file=sys.stderr,
+            )
 
     return audio_path, ts_path
 
@@ -300,7 +466,7 @@ def generate_scene_by_scene(script: dict, voice_id: str, api_key: str,
 # ---------------------------------------------------------------------------
 
 def generate_single_pass(script: dict, voice_id: str, api_key: str,
-                         output_dir: Path, speed: float):
+                         output_dir: Path):
     """Generate full script in one API call (legacy mode)."""
     full_text = script.get("audio", {}).get("voice_over", {}).get("full_script", "")
     if not full_text:
@@ -314,8 +480,7 @@ def generate_single_pass(script: dict, voice_id: str, api_key: str,
         text=full_text,
         voice_id=voice_id,
         api_key=api_key,
-        emotion="default",
-        speed=speed,
+        settings=PHASE_TTS[DEFAULT_PHASE],
         output_path=audio_path,
     )
 
@@ -341,7 +506,6 @@ def generate_single_pass(script: dict, voice_id: str, api_key: str,
 def main():
     parser = argparse.ArgumentParser(description="Generate voice-over via ElevenLabs")
     parser.add_argument("script", help="Path to script JSON file")
-    parser.add_argument("--speed", type=float, default=1.0, help="Speech speed (e.g., 1.15)")
     parser.add_argument("--single", action="store_true", help="Single-pass mode (no per-scene emotions)")
     parser.add_argument("--gap", type=int, default=200, help="Inter-scene silence in ms (default: 200)")
     args = parser.parse_args()
@@ -359,9 +523,9 @@ def main():
     output_dir = script_path.parent
 
     if args.single:
-        generate_single_pass(script, voice_id, api_key, output_dir, args.speed)
+        generate_single_pass(script, voice_id, api_key, output_dir)
     else:
-        generate_scene_by_scene(script, voice_id, api_key, output_dir, args.speed, args.gap)
+        generate_scene_by_scene(script, voice_id, api_key, output_dir, args.gap)
 
 
 if __name__ == "__main__":

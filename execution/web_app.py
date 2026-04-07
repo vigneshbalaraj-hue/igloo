@@ -25,6 +25,10 @@ from pathlib import Path
 
 from flask import Flask, render_template, request, jsonify, Response, send_file
 
+# Local — shared with generate_script.py
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import prompt_bank as pb  # noqa: E402
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 app = Flask(__name__)
 
@@ -128,32 +132,10 @@ def slugify(text: str) -> str:
 # Gemini prompts (same as generate_script.py)
 # ---------------------------------------------------------------------------
 
-NARRATION_GENERATE_PROMPT = """You are a viral short-form video scriptwriter. Write a narration script for a {duration}-second vertical reel.
-
-TOPIC: {topic}
-THEME: {theme}
-
-RULES:
-- Alternate between "anchor" (direct-to-camera, person speaking) and "b-roll" (cinematic footage with voiceover) scenes
-- Start and end with anchor scenes
-- Aim for ~9 scenes (odd number so it starts and ends on anchor)
-- Each scene's narration should be 1-3 sentences, punchy and conversational
-- Total word count should produce roughly {duration} seconds at normal speaking pace (~2.5 words/sec)
-- Hook must stop the scroll in the first 2 seconds
-- End with a clear CTA (save, follow, share)
-- No abstract emotional cues in stage directions
-- All food references must be vegan
-
-For each scene provide:
-- scene_id (integer, sequential starting at 1)
-- type ("anchor" or "b-roll")
-- voice_emotion (one of: firm, urgent, contemplative, informative, warm, reassuring, gentle, confident)
-- purpose (short description: HOOK, WHY, STAKES, REFRAME, SCIENCE, SOLUTION, CTA, etc.)
-- narration_text (the actual words spoken)
-- caption_text (same as narration but with 1-2 KEY emphasis words in ALL CAPS)
-
-Return ONLY a JSON array of scene objects. No explanation."""
-
+# NARRATION_GENERATE_PROMPT removed — the from-scratch path now goes through
+# prompt_bank.build_narration_prompt() (see /api/generate-narration). The
+# adapt path below is kept verbatim because user-supplied scripts must be
+# preserved word-for-word.
 
 NARRATION_ADAPT_PROMPT = """You are a viral short-form video scriptwriter. The user has provided a narration script. Adapt it into a structured scene-by-scene format for a {duration}-second vertical reel.
 
@@ -201,7 +183,7 @@ SCRIPT NARRATION:
 For each character option, provide a JSON object with:
 - "option": integer (1, 2, or 3)
 - "description": Detailed description (ethnicity, age, clothing, setting)
-- "image_prompt": Photorealistic Imagen prompt with camera specs (e.g., "shot on Sony A7IV, 50mm f/1.8, shallow depth of field"), lighting. NO abstract emotional cues. All food/props must be vegan.
+- "image_prompt": Photorealistic Imagen prompt with camera specs (e.g., "shot on Sony A7IV, 50mm f/1.8, shallow depth of field"), lighting. NO abstract emotional cues.
 - "voice": object with "gender", "accent", "tone"
 
 Make characters diverse and authentic to the content.
@@ -215,7 +197,7 @@ REEL TOPIC: {topic}
 
 Return JSON with:
 - "description": expanded detailed description
-- "image_prompt": photorealistic Imagen prompt with camera specs, lighting. NO abstract cues. Vegan food only.
+- "image_prompt": photorealistic Imagen prompt with camera specs, lighting. NO abstract cues.
 - "voice": object with "gender", "accent", "tone"
 
 Return ONLY the JSON object. No explanation."""
@@ -284,7 +266,7 @@ Structure:
 }}
 
 Do NOT include narration_start/end, scene_duration, audio_slice, actual_duration_seconds, or elevenlabs_voice_id.
-Image prompts: photorealistic, concrete, camera specs. NO abstract emotional cues. Vegan food only.
+Image prompts: photorealistic, concrete, camera specs. NO abstract emotional cues.
 Anchor video prompts: minimal to not override lip-sync.
 
 Return ONLY the JSON object. No explanation."""
@@ -310,22 +292,57 @@ def api_generate_narration():
     topic = data.get("topic", "")
     duration = data.get("duration", 40)
     user_script = data.get("script", "")
+    niche = data.get("niche")  # optional override; auto-resolved from theme if absent
 
     api_key = load_env("GEMINI_API_KEY")
     if not api_key:
         return jsonify({"error": "GEMINI_API_KEY not set in .env"}), 500
+    voice_id = load_env("ELEVENLABS_VOICE_ID")  # may be None on first setup
 
     try:
         if user_script.strip():
+            # User-supplied script: preserve their words, only re-shape into scenes.
             prompt = NARRATION_ADAPT_PROMPT.format(
                 theme=theme, topic=topic, duration=duration, script=user_script)
-        else:
-            prompt = NARRATION_GENERATE_PROMPT.format(
-                theme=theme, topic=topic, duration=duration)
+            raw = call_gemini(prompt, api_key, temperature=0.7)
+            scenes = extract_json_from_text(raw)
+            return jsonify({"scenes": scenes, "niche": None})
 
-        raw = call_gemini(prompt, api_key, temperature=0.7)
+        # From-scratch path: prompt bank.
+        prompt, resolved_niche = pb.build_narration_prompt(
+            theme=theme, topic=topic, duration=duration,
+            niche=niche, api_key=api_key, voice_id=voice_id)
+        raw = call_gemini(prompt, api_key, temperature=0.9)
         scenes = extract_json_from_text(raw)
-        return jsonify({"scenes": scenes})
+
+        # Bug 2 fix: deterministic repair pass before validation. Fixes
+        # recoverable LLM drift (typo'd field names, banned chars, missing
+        # captions) without burning a retry call.
+        scenes, repair_log = pb.repair_scenes(scenes)
+
+        # Step 5 validation with single regenerate-on-failure. The retry
+        # prompt restates the FULL schema, not just the failures, to prevent
+        # the multi-bug cascade observed in session 19.
+        failures = pb.validate_scenes(scenes, duration, voice_id=voice_id)
+        retry_repair_log: list[str] = []
+        if failures:
+            retry_prompt = pb.build_retry_prompt(
+                base_prompt=prompt,
+                failures=failures,
+                duration=duration,
+                voice_id=voice_id,
+            )
+            raw = call_gemini(retry_prompt, api_key, temperature=0.9)
+            scenes = extract_json_from_text(raw)
+            scenes, retry_repair_log = pb.repair_scenes(scenes)
+            failures = pb.validate_scenes(scenes, duration, voice_id=voice_id)
+
+        return jsonify({
+            "scenes": scenes,
+            "niche": resolved_niche,
+            "validation_warnings": failures or None,
+            "repair_log": (repair_log + retry_repair_log) or None,
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

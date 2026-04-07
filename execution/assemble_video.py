@@ -388,6 +388,34 @@ def mix_background_music(video_path: Path, music_path: Path, output_path: Path,
     ], f"mix background music (vol={music_volume}, fadeout={fadeout_seconds}s)")
 
 
+def speed_up_video(video_path: Path, output_path: Path, speed: float):
+    """Speed up entire video by `speed` factor using setpts (video) + atempo (audio).
+
+    Pitch-preserving (atempo uses WSOLA), so voice and music both compress in time
+    without sounding chipmunked. Audio and video stretch by exactly the same factor,
+    so lip-sync is preserved.
+
+    Used as the final pipeline step to apply 1.2x reel pacing without burning the
+    speed parameter into ElevenLabs (which has a hard cap at 1.2x and degrades
+    quality when used).
+    """
+    if speed == 1.0:
+        # No-op — just copy
+        shutil.copy2(video_path, output_path)
+        return
+
+    setpts = f"PTS/{speed}"
+    # atempo accepts 0.5..2.0 in a single instance; 1.2 is well within range
+    run_ffmpeg([
+        "-i", str(video_path),
+        "-filter_complex", f"[0:v]setpts={setpts}[v];[0:a]atempo={speed}[a]",
+        "-map", "[v]", "-map", "[a]",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-c:a", "aac", "-b:a", "192k",
+        str(output_path)
+    ], f"speed up final reel by {speed}x (setpts + atempo, pitch-preserving)")
+
+
 # ========== CAPTIONS (ASS SUBTITLES) ==========
 
 def ts_to_ass(seconds: float) -> str:
@@ -557,6 +585,10 @@ def main():
                         help="Background music volume (0.0-1.0, default: 0.30)")
     parser.add_argument("--voice-volume", type=float, default=1.0,
                         help="Voiceover volume boost (1.0=normal, 1.5=50%% louder)")
+    parser.add_argument("--final-speed", type=float, default=1.2,
+                        help="Final reel playback speed (default 1.2). "
+                             "Applied as the LAST step via setpts+atempo (pitch-preserving). "
+                             "Set to 1.0 to disable.")
     args = parser.parse_args()
 
     script_path = Path(args.script)
@@ -705,12 +737,24 @@ def main():
         shutil.copy2(final_path, dest)
         final_path = dest
 
+    # Step 8: Final pacing speedup (default 1.2x) — pitch-preserving setpts+atempo
+    if args.final_speed != 1.0:
+        print(f"\n--- Step 8: Final speedup ({args.final_speed}x setpts+atempo) ---")
+        # Move 1.0x baseline aside, then write the sped-up version to the canonical name
+        baseline_path = base_dir / f"final_reel{suffix}_1.0x.mp4"
+        shutil.move(str(final_path), str(baseline_path))
+        speed_up_video(baseline_path, final_path, args.final_speed)
+        print(f"  1.0x baseline preserved at: {baseline_path}")
+
     dur = get_duration(final_path)
     print(f"\n=== DONE ===")
     print(f"Final reel: {final_path}")
     print(f"Duration: {dur:.2f}s")
-    print(f"Voiceover: {total_duration:.2f}s")
-    print(f"Sync delta: {abs(dur - total_duration):.2f}s")
+    print(f"Voiceover: {total_duration:.2f}s (1.0x source)")
+    if args.final_speed != 1.0:
+        print(f"Final speed: {args.final_speed}x (applied via setpts+atempo)")
+        print(f"Expected reel duration: {total_duration / args.final_speed:.2f}s")
+    print(f"Sync delta: {abs(dur - total_duration / args.final_speed):.2f}s")
 
 
 if __name__ == "__main__":

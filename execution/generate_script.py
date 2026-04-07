@@ -24,6 +24,10 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+# Local — shared with web_app.py so the prompt bank lives in one place
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import prompt_bank as pb  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -136,32 +140,9 @@ def print_divider(title: str = ""):
 # Sub-step 0b: Narration Script
 # ---------------------------------------------------------------------------
 
-NARRATION_GENERATE_PROMPT = """You are a viral short-form video scriptwriter. Write a narration script for a {duration}-second vertical reel.
-
-TOPIC: {topic}
-THEME: {theme}
-
-RULES:
-- Alternate between "anchor" (direct-to-camera, person speaking) and "b-roll" (cinematic footage with voiceover) scenes
-- Start and end with anchor scenes
-- Aim for ~9 scenes (odd number so it starts and ends on anchor)
-- Each scene's narration should be 1-3 sentences, punchy and conversational
-- Total word count should produce roughly {duration} seconds at normal speaking pace (~2.5 words/sec)
-- Hook must stop the scroll in the first 2 seconds
-- End with a clear CTA (save, follow, share)
-- No abstract emotional cues in stage directions
-- All food references must be vegan
-
-For each scene provide:
-- scene_id (integer, sequential starting at 1)
-- type ("anchor" or "b-roll")
-- voice_emotion (one of: firm, urgent, contemplative, informative, warm, reassuring, gentle, confident)
-- purpose (short description: HOOK, WHY, STAKES, REFRAME, SCIENCE, SOLUTION, CTA, etc.)
-- narration_text (the actual words spoken)
-- caption_text (same as narration but with 1-2 KEY emphasis words in ALL CAPS)
-
-Return ONLY a JSON array of scene objects. No explanation."""
-
+# NARRATION_GENERATE_PROMPT removed — the from-scratch path now goes through
+# prompt_bank.build_narration_prompt() (see generate_narration() below).
+# The adapt path is kept because user-supplied scripts must be preserved.
 
 NARRATION_ADAPT_PROMPT = """You are a viral short-form video scriptwriter. The user has provided a narration script. Adapt it into a structured scene-by-scene format for a {duration}-second vertical reel.
 
@@ -204,8 +185,16 @@ Return ONLY the revised JSON array of scene objects. No explanation."""
 
 
 def generate_narration(theme: str, topic: str, duration: int,
-                       user_script: str | None, api_key: str) -> list:
-    """Sub-step 0b: Generate or adapt narration, with user review loop."""
+                       user_script: str | None, api_key: str,
+                       niche: str | None = None,
+                       voice_id: str | None = None) -> list:
+    """Sub-step 0b: Generate or adapt narration, with user review loop.
+
+    From-scratch path uses the prompt bank (execution/prompt_bank.md) — see
+    integrate_prompt_bank.md. The user-supplied-script path keeps the legacy
+    NARRATION_ADAPT_PROMPT because the user's words are sacred and we only
+    re-shape them into scenes.
+    """
 
     print_divider("Step 0b: Narration Script")
 
@@ -213,13 +202,54 @@ def generate_narration(theme: str, topic: str, duration: int,
         print("  Adapting your script into scene-by-scene format...")
         prompt = NARRATION_ADAPT_PROMPT.format(
             theme=theme, topic=topic, duration=duration, script=user_script)
+        gen_temperature = 0.7
     else:
-        print("  Generating narration script from scratch...")
-        prompt = NARRATION_GENERATE_PROMPT.format(
-            theme=theme, topic=topic, duration=duration)
+        print("  Generating narration script via prompt bank...")
+        prompt, resolved_niche = pb.build_narration_prompt(
+            theme=theme, topic=topic, duration=duration,
+            niche=niche, api_key=api_key, voice_id=voice_id)
+        print(f"  Niche voice: {resolved_niche}")
+        print(f"  Calibrated wps: {pb.get_voice_wps(voice_id):.2f} "
+              f"(target ~{int(round(duration * pb.get_voice_wps(voice_id)))} words)")
+        gen_temperature = 0.9  # Step 4 of integrate_prompt_bank.md
 
-    raw = call_gemini(prompt, api_key, temperature=0.7)
+    raw = call_gemini(prompt, api_key, temperature=gen_temperature)
     scenes = parse_json_response(raw)
+
+    # Bug 2 fix: deterministic repair pass BEFORE validation. Fixes recoverable
+    # LLM drift (typo'd field names, banned chars, missing captions, etc.)
+    # without burning a retry call.
+    if not user_script:
+        scenes, repair_log = pb.repair_scenes(scenes)
+        if repair_log:
+            print(f"  [repair] Auto-fixed {len(repair_log)} issue(s):")
+            for entry in repair_log:
+                print(f"    - {entry}")
+
+        # Step 5: validate. Regenerate once if the first attempt still fails
+        # after repair. The retry prompt restates the FULL schema, not just
+        # the failures, to prevent the multi-bug cascade from session 19.
+        failures = pb.validate_scenes(scenes, duration, voice_id=voice_id)
+        if failures:
+            print(f"  [validator] First attempt rejected: {failures}")
+            print("  Regenerating with full schema restatement...")
+            retry_prompt = pb.build_retry_prompt(
+                base_prompt=prompt,
+                failures=failures,
+                duration=duration,
+                voice_id=voice_id,
+            )
+            raw = call_gemini(retry_prompt, api_key, temperature=gen_temperature)
+            scenes = parse_json_response(raw)
+            scenes, retry_repair_log = pb.repair_scenes(scenes)
+            if retry_repair_log:
+                print(f"  [repair] Post-retry auto-fixed {len(retry_repair_log)} issue(s):")
+                for entry in retry_repair_log:
+                    print(f"    - {entry}")
+            failures = pb.validate_scenes(scenes, duration, voice_id=voice_id)
+            if failures:
+                print(f"  [validator] WARNING: still failing after retry: {failures}")
+                print("  Continuing anyway — flag for manual review.")
 
     while True:
         # Display scenes
@@ -282,7 +312,7 @@ SCRIPT NARRATION:
 For each character option, provide a JSON object with these exact fields:
 - "option": integer (1, 2, or 3)
 - "description": A detailed description of who they are, what they look like, what they're wearing, and their setting/environment. Be specific about ethnicity, age, clothing, and surroundings.
-- "image_prompt": A photorealistic Imagen-ready prompt. Must include: specific physical features, clothing, setting details, camera specs (e.g., "shot on Sony A7IV, 50mm f/1.8, shallow depth of field"), lighting description. NO abstract emotional cues. All food/props must be vegan.
+- "image_prompt": A photorealistic Imagen-ready prompt. Must include: specific physical features, clothing, setting details, camera specs (e.g., "shot on Sony A7IV, 50mm f/1.8, shallow depth of field"), lighting description. NO abstract emotional cues.
 - "voice": an object with "gender" (male/female), "accent" (e.g., "American English, neutral"), "tone" (e.g., "calm, confident, conversational")
 
 Make the characters diverse and authentic to the content. Each option should feel distinctly different.
@@ -299,7 +329,7 @@ REEL TOPIC: {topic}
 
 Generate a JSON object with:
 - "description": Expand the user's description into a detailed character + setting description
-- "image_prompt": A photorealistic Imagen-ready prompt with camera specs (e.g., "shot on Sony A7IV, 50mm f/1.8"), lighting, specific visual details. NO abstract emotional cues. All food/props must be vegan.
+- "image_prompt": A photorealistic Imagen-ready prompt with camera specs (e.g., "shot on Sony A7IV, 50mm f/1.8"), lighting, specific visual details. NO abstract emotional cues.
 - "voice": an object with "gender", "accent", "tone"
 
 Return ONLY the JSON object. No explanation."""
@@ -438,7 +468,7 @@ Generate the COMPLETE script JSON with all fields. Follow this exact structure:
         "method": "image-to-video",
         "kling_duration": 5,
         "trim_to": <estimate from word count, usually 3-5s>,
-        "image_prompt": "<photorealistic, concrete visual, camera specs, NO abstract cues, vegan food only>",
+        "image_prompt": "<photorealistic, concrete visual, camera specs, NO abstract cues>",
         "video_prompt": "<describe slow camera movement + subtle motion matching narration>"
       }},
       "caption_text": "<from narration>"
@@ -514,7 +544,6 @@ IMPORTANT:
 - Image prompts: photorealistic, concrete visuals, camera specs (Canon R5/Sony A7IV, specific lens + aperture), lighting description, shallow depth of field. NO abstract emotional descriptions.
 - Video prompts for anchors: keep minimal (character + simple gesture/expression). Strong motion directives hurt lip-sync quality.
 - Video prompts for b-roll: describe slow camera movements (dolly, drift, push-in) + subtle motion in scene.
-- All food must be vegan.
 - Background music description MUST end with "Instrumental only, no vocals, no singing, no humming."
 
 Return ONLY the JSON object. No explanation."""
@@ -614,6 +643,9 @@ def main():
                         help="Topic (e.g., 'Fasting when sick', 'Forehand technique')")
     parser.add_argument("--script", default=None,
                         help="User-provided narration text (if omitted, Gemini generates)")
+    parser.add_argument("--niche", default=None,
+                        help="Prompt-bank niche voice (spirituality/fitness/finance/parenting/wellness). "
+                             "If omitted, derived from --theme keywords; unknown themes trigger dynamic generation.")
     parser.add_argument("--duration", type=int, default=40,
                         help="Target duration in seconds (default: 40)")
     parser.add_argument("--output-dir", default=None,
@@ -621,6 +653,13 @@ def main():
     args = parser.parse_args()
 
     api_key = load_env("GEMINI_API_KEY")
+    # Voice ID drives the calibrated word-count target so the script Gemini
+    # writes matches the actual voice's pace. .env is the source of truth.
+    try:
+        voice_id = load_env("ELEVENLABS_VOICE_ID")
+    except SystemExit:
+        voice_id = None
+        print("  [warn] ELEVENLABS_VOICE_ID not set — using default wps target")
     project_root = Path(__file__).resolve().parent.parent
 
     slug = slugify(args.topic)
@@ -650,7 +689,8 @@ def main():
 
     # --- Sub-step 0b: Narration ---
     scenes = generate_narration(args.theme, args.topic, args.duration,
-                                args.script, api_key)
+                                args.script, api_key, niche=args.niche,
+                                voice_id=voice_id)
 
     # --- Sub-step 0c: Character ---
     character = select_character(args.theme, args.topic, scenes, api_key)

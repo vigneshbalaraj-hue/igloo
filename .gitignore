@@ -35,3 +35,10 @@ Thumbs.db
 Example reels created/
 AI_image_and_video_lessons/
 Examples/
+
+# Bundled binaries (Modal/Linux installs ffmpeg via apt)
+tools/ffmpeg.exe
+tools/ffprobe.exe
+
+# Local Claude Code settings
+.claude/
