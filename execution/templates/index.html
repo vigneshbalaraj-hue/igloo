@@ -1,0 +1,1186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reel Engine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0C0A09;
+      --surface: #1C1917;
+      --surface-raised: #292524;
+      --border: #3F3F46;
+      --border-subtle: #292524;
+      --text: #FAFAF9;
+      --text-secondary: #A8A29E;
+      --text-muted: #78716C;
+      --accent: #D97706;
+      --accent-hover: #B45309;
+      --accent-light: #F59E0B;
+      --accent-glow: rgba(217, 119, 6, 0.15);
+      --accent-glow-strong: rgba(217, 119, 6, 0.25);
+      --success: #059669;
+      --success-light: #10B981;
+      --error: #DC2626;
+      --error-light: #EF4444;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100dvh;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    /* Ambient background glows */
+    body::before {
+      content: '';
+      position: fixed;
+      top: -30%;
+      right: -15%;
+      width: 900px;
+      height: 900px;
+      background: radial-gradient(circle, rgba(217, 119, 6, 0.18) 0%, rgba(217, 119, 6, 0.08) 30%, rgba(180, 83, 9, 0.03) 50%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+      animation: glowPulse 8s ease-in-out infinite alternate;
+    }
+
+    /* Grain overlay */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      pointer-events: none;
+      opacity: 0.045;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+      background-repeat: repeat;
+    }
+
+    /* Large warm glow — bottom left */
+    .bg-glow {
+      position: fixed;
+      bottom: -20%;
+      left: -15%;
+      width: 800px;
+      height: 800px;
+      background: radial-gradient(circle, rgba(245, 158, 11, 0.14) 0%, rgba(217, 119, 6, 0.06) 35%, transparent 65%);
+      pointer-events: none;
+      z-index: 0;
+      animation: glowDrift 14s ease-in-out infinite alternate;
+    }
+
+    /* Central floating orb */
+    .bg-glow-2 {
+      position: fixed;
+      top: 35%;
+      left: 55%;
+      transform: translate(-50%, -50%);
+      width: 1000px;
+      height: 600px;
+      background: radial-gradient(ellipse, rgba(217, 119, 6, 0.10) 0%, rgba(180, 83, 9, 0.04) 30%, transparent 60%);
+      pointer-events: none;
+      z-index: 0;
+      animation: glowDrift2 20s ease-in-out infinite alternate-reverse;
+    }
+
+    /* Accent streak — top left */
+    .bg-streak {
+      position: fixed;
+      top: 10%;
+      left: -5%;
+      width: 500px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, rgba(217, 119, 6, 0.25), rgba(245, 158, 11, 0.15), transparent);
+      pointer-events: none;
+      z-index: 0;
+      transform: rotate(-15deg);
+      filter: blur(1px);
+      animation: streakShift 10s ease-in-out infinite alternate;
+    }
+
+    /* Second streak */
+    .bg-streak-2 {
+      position: fixed;
+      bottom: 25%;
+      right: -5%;
+      width: 400px;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(245, 158, 11, 0.20), rgba(217, 119, 6, 0.10), transparent);
+      pointer-events: none;
+      z-index: 0;
+      transform: rotate(12deg);
+      filter: blur(1px);
+      animation: streakShift 13s ease-in-out infinite alternate-reverse;
+    }
+
+    @keyframes glowPulse {
+      0% { opacity: 0.7; transform: scale(1); }
+      100% { opacity: 1; transform: scale(1.05); }
+    }
+
+    @keyframes glowDrift {
+      0% { transform: translate(0, 0) scale(1); opacity: 0.8; }
+      100% { transform: translate(40px, -30px) scale(1.1); opacity: 1; }
+    }
+
+    @keyframes glowDrift2 {
+      0% { transform: translate(-50%, -50%) scale(1); }
+      100% { transform: translate(-45%, -55%) scale(1.12); }
+    }
+
+    @keyframes streakShift {
+      0% { opacity: 0.4; transform: rotate(-15deg) translateX(0); }
+      100% { opacity: 1; transform: rotate(-15deg) translateX(60px); }
+    }
+
+    /* Dot grid pattern */
+    .bg-grid {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      background-image: radial-gradient(circle, rgba(255,255,255,0.045) 1px, transparent 1px);
+      background-size: 28px 28px;
+    }
+
+    .app {
+      max-width: 780px;
+      margin: 0 auto;
+      padding: 48px 24px 80px;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* ─── Header ─── */
+    .header {
+      margin-bottom: 48px;
+    }
+    .header h1 {
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      color: var(--text);
+    }
+    .header h1 span {
+      color: var(--accent);
+    }
+    .header p {
+      font-size: 16px;
+      font-weight: 300;
+      color: var(--text-secondary);
+      margin-top: 6px;
+      max-width: 65ch;
+    }
+
+    /* ─── Stepper ─── */
+    .stepper {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      margin-bottom: 40px;
+    }
+    .stepper-step { display: flex; flex-direction: column; align-items: center; }
+    .stepper-dot {
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; font-weight: 600;
+      background: var(--surface);
+      color: var(--text-muted);
+      border: 2px solid var(--border-subtle);
+      transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .stepper-dot.active {
+      background: var(--accent);
+      color: var(--bg);
+      border-color: var(--accent);
+      box-shadow: 0 0 20px var(--accent-glow-strong);
+    }
+    .stepper-dot.done {
+      background: var(--success);
+      color: white;
+      border-color: var(--success);
+    }
+    .stepper-label {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-muted);
+      margin-top: 6px;
+      letter-spacing: 0.02em;
+    }
+    .stepper-dot.active + .stepper-label,
+    .stepper-step:has(.stepper-dot.active) .stepper-label { color: var(--accent-light); }
+    .stepper-line {
+      width: 60px; height: 2px;
+      background: var(--border-subtle);
+      margin: 0 4px;
+      margin-bottom: 20px;
+      transition: background 0.4s;
+    }
+    .stepper-line.done { background: var(--success); }
+
+    /* ─── Step Panels ─── */
+    .step-panel {
+      animation: fadeSlideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .panel-title {
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin-bottom: 8px;
+    }
+    .panel-subtitle {
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin-bottom: 28px;
+      max-width: 65ch;
+      line-height: 1.6;
+    }
+
+    /* ─── Forms ─── */
+    .field { margin-bottom: 20px; }
+    .field label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+      letter-spacing: 0.01em;
+    }
+    input[type="text"], input[type="number"], textarea, select {
+      width: 100%;
+      padding: 12px 16px;
+      background: var(--surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      color: var(--text);
+      font-size: 15px;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 400;
+      outline: none;
+      transition: border-color 0.3s, box-shadow 0.3s;
+    }
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    input::placeholder, textarea::placeholder {
+      color: var(--text-muted);
+      font-weight: 300;
+    }
+    textarea { resize: vertical; min-height: 88px; line-height: 1.6; }
+
+    .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .field-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+
+    /* ─── Buttons ─── */
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      font-family: 'Outfit', sans-serif;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      letter-spacing: 0.01em;
+    }
+    .btn:active:not(:disabled) { transform: scale(0.97); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-primary {
+      background: var(--accent);
+      color: var(--bg);
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: var(--accent-hover);
+      box-shadow: 0 4px 20px var(--accent-glow-strong);
+    }
+    .btn-success {
+      background: var(--success);
+      color: white;
+    }
+    .btn-success:hover:not(:disabled) { background: #047857; }
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover:not(:disabled) {
+      background: var(--surface);
+      color: var(--text);
+    }
+    .btn-danger {
+      background: var(--error);
+      color: white;
+    }
+    .btn-sm { padding: 8px 16px; font-size: 13px; }
+
+    .btn-group { display: flex; gap: 10px; margin-top: 24px; flex-wrap: wrap; }
+
+    /* ─── Scene List ─── */
+    .scene-item {
+      padding: 16px 0;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .scene-item:last-child { border-bottom: none; }
+    .scene-meta {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 6px;
+    }
+    .scene-tag {
+      font-size: 10px; font-weight: 700; padding: 3px 10px;
+      border-radius: 5px; text-transform: uppercase; letter-spacing: 0.08em;
+    }
+    .scene-tag.anchor { background: var(--accent); color: var(--bg); }
+    .scene-tag.b-roll { background: var(--surface-raised); color: var(--accent-light); border: 1px solid var(--border); }
+    .scene-purpose { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+    .scene-emotion { font-size: 12px; color: var(--text-secondary); }
+    .scene-text {
+      font-size: 15px; line-height: 1.65; color: var(--text);
+      font-weight: 300; margin-top: 4px;
+    }
+    .scene-caption { font-size: 12px; color: var(--text-muted); margin-top: 4px; font-weight: 400; }
+
+    .scene-stats {
+      font-size: 13px; color: var(--text-muted); padding: 12px 0;
+      border-top: 1px solid var(--border-subtle); margin-top: 4px;
+      font-weight: 400;
+    }
+
+    /* ─── Character Cards ─── */
+    .char-option {
+      padding: 20px;
+      background: var(--surface);
+      border: 2px solid var(--border-subtle);
+      border-radius: 12px;
+      margin-bottom: 12px;
+      cursor: pointer;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .char-option:hover { border-color: var(--accent); background: var(--surface-raised); }
+    .char-option.selected {
+      border-color: var(--accent);
+      background: var(--accent-glow);
+      box-shadow: 0 0 24px var(--accent-glow);
+    }
+    .char-label { font-size: 13px; font-weight: 600; color: var(--accent-light); margin-bottom: 8px; }
+    .char-desc { font-size: 14px; line-height: 1.6; color: var(--text); font-weight: 300; }
+    .char-voice { font-size: 12px; color: var(--text-muted); margin-top: 8px; font-weight: 400; }
+
+    /* ─── Assembly Summary ─── */
+    .summary-row {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;
+      padding: 20px 0; border-bottom: 1px solid var(--border-subtle);
+      margin-bottom: 20px;
+    }
+    .summary-stat .stat-label { font-size: 11px; color: var(--text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; }
+    .summary-stat .stat-value { font-size: 18px; font-weight: 600; margin-top: 4px; }
+
+    /* ─── Loading ─── */
+    .loading-state {
+      display: flex; align-items: center; gap: 12px;
+      padding: 20px 0;
+      color: var(--text-secondary);
+      font-size: 14px; font-weight: 400;
+    }
+    .spinner {
+      width: 18px; height: 18px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ─── Progress View ─── */
+    .progress-view {
+      min-height: 70vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+    .phase-icon {
+      width: 64px; height: 64px;
+      border-radius: 50%;
+      background: var(--accent-glow);
+      border: 2px solid var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 32px;
+      animation: breathe 3s ease-in-out infinite;
+    }
+    @keyframes breathe {
+      0%, 100% { box-shadow: 0 0 20px var(--accent-glow); transform: scale(1); }
+      50% { box-shadow: 0 0 40px var(--accent-glow-strong); transform: scale(1.05); }
+    }
+    .phase-icon .dot {
+      width: 12px; height: 12px;
+      background: var(--accent);
+      border-radius: 50%;
+    }
+
+    .phase-text {
+      font-size: 28px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      color: var(--text);
+      transition: opacity 0.4s;
+      min-height: 40px;
+    }
+    .phase-sub {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-top: 12px;
+      font-weight: 300;
+    }
+
+    .progress-track {
+      width: 280px;
+      height: 3px;
+      background: var(--surface-raised);
+      border-radius: 2px;
+      margin-top: 40px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 2px;
+      width: 0%;
+      transition: width 1s cubic-bezier(0.16, 1, 0.3, 1);
+      box-shadow: 0 0 8px var(--accent-glow);
+    }
+
+    .time-remaining {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 16px;
+      font-weight: 400;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ─── Complete View ─── */
+    .complete-view {
+      min-height: 70vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      animation: fadeSlideIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .complete-check {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      background: rgba(5, 150, 105, 0.15);
+      border: 2px solid var(--success);
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 28px;
+    }
+    .complete-check svg {
+      width: 32px; height: 32px;
+      stroke: var(--success-light);
+      stroke-width: 2.5;
+      fill: none;
+    }
+    .complete-title {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 8px;
+    }
+    .complete-sub {
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin-bottom: 32px;
+      font-weight: 300;
+    }
+    .btn-download {
+      padding: 16px 40px;
+      font-size: 16px;
+      font-weight: 700;
+      background: var(--accent);
+      color: var(--bg);
+      border-radius: 12px;
+      border: none;
+      cursor: pointer;
+      font-family: 'Outfit', sans-serif;
+      transition: all 0.2s;
+      letter-spacing: 0.01em;
+    }
+    .btn-download:hover {
+      background: var(--accent-hover);
+      box-shadow: 0 8px 32px var(--accent-glow-strong);
+      transform: translateY(-1px);
+    }
+    .btn-download:active { transform: scale(0.97) translateY(0); }
+
+    .create-another {
+      margin-top: 20px;
+      font-size: 14px;
+      color: var(--text-muted);
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 400;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      transition: color 0.2s;
+    }
+    .create-another:hover { color: var(--text-secondary); }
+
+    /* ─── Error View ─── */
+    .error-view {
+      min-height: 70vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      animation: fadeSlideIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .error-icon {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      background: rgba(220, 38, 38, 0.12);
+      border: 2px solid var(--error);
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 28px;
+    }
+    .error-icon svg {
+      width: 32px; height: 32px;
+      stroke: var(--error-light);
+      stroke-width: 2.5;
+      fill: none;
+    }
+    .error-message {
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin-bottom: 24px;
+      max-width: 50ch;
+      line-height: 1.6;
+      font-weight: 300;
+    }
+
+    /* ─── Utility ─── */
+    .hidden { display: none !important; }
+
+    /* ─── Scrollbar ─── */
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ─── Responsive ─── */
+    @media (max-width: 640px) {
+      .app { padding: 32px 16px 64px; }
+      .header h1 { font-size: 26px; }
+      .field-row, .field-row-3 { grid-template-columns: 1fr; }
+      .summary-row { grid-template-columns: 1fr 1fr; }
+      .stepper-line { width: 32px; }
+      .phase-text { font-size: 22px; }
+      .btn-group { flex-direction: column; }
+      .btn-group .btn { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Background effects -->
+  <div class="bg-grid"></div>
+  <div class="bg-glow"></div>
+  <div class="bg-glow-2"></div>
+  <div class="bg-streak"></div>
+  <div class="bg-streak-2"></div>
+
+  <div class="app">
+
+    <!-- ─── Header ─── -->
+    <header class="header">
+      <h1>Reel <span>Engine</span></h1>
+      <p>From idea to cinematic reel. In minutes.</p>
+    </header>
+
+    <!-- ═══════════════ CREATE VIEW ═══════════════ -->
+    <div id="view-create">
+
+      <!-- Stepper -->
+      <div class="stepper">
+        <div class="stepper-step">
+          <div class="stepper-dot active" id="dot-1">1</div>
+          <div class="stepper-label">Topic</div>
+        </div>
+        <div class="stepper-line" id="line-1"></div>
+        <div class="stepper-step">
+          <div class="stepper-dot" id="dot-2">2</div>
+          <div class="stepper-label">Script</div>
+        </div>
+        <div class="stepper-line" id="line-2"></div>
+        <div class="stepper-step">
+          <div class="stepper-dot" id="dot-3">3</div>
+          <div class="stepper-label">Character</div>
+        </div>
+        <div class="stepper-line" id="line-3"></div>
+        <div class="stepper-step">
+          <div class="stepper-dot" id="dot-4">4</div>
+          <div class="stepper-label">Finalize</div>
+        </div>
+      </div>
+
+      <!-- Step 1: Topic -->
+      <div id="step-1" class="step-panel">
+        <div class="panel-title">What's your reel about?</div>
+        <div class="panel-subtitle">Pick a theme and topic. We'll handle the rest.</div>
+        <div class="field-row">
+          <div class="field">
+            <label>Theme</label>
+            <input type="text" id="inp-theme" placeholder="e.g., Health & Wellness">
+          </div>
+          <div class="field">
+            <label>Topic</label>
+            <input type="text" id="inp-topic" placeholder="e.g., Fasting when sick">
+          </div>
+        </div>
+        <div class="field" style="max-width:200px">
+          <label>Target Duration (seconds)</label>
+          <input type="number" id="inp-duration" value="40" min="20" max="90">
+        </div>
+        <div class="field">
+          <label>Your Script (optional)</label>
+          <textarea id="inp-script" rows="3" placeholder="Paste your narration here, or leave blank for AI to write it..."></textarea>
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-primary" onclick="goToNarration()">Write Script</button>
+        </div>
+      </div>
+
+      <!-- Step 2: Narration -->
+      <div id="step-2" class="step-panel hidden">
+        <div class="panel-title">Your narration</div>
+        <div class="panel-subtitle">Review the scene-by-scene script. Edit or regenerate until it feels right.</div>
+        <div id="narration-loading" class="loading-state hidden"><span class="spinner"></span> Writing your script...</div>
+        <div id="narration-scenes"></div>
+        <div id="narration-stats" class="scene-stats hidden"></div>
+        <div class="field" style="margin-top:16px">
+          <label>Edit instructions</label>
+          <textarea id="inp-edit-narration" rows="2" placeholder="e.g., Make the hook more provocative, shorten scene 5..."></textarea>
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-primary" onclick="approveNarration()">Approve</button>
+          <button class="btn btn-ghost" onclick="editNarration()">Apply Edits</button>
+          <button class="btn btn-ghost btn-sm" onclick="regenerateNarration()">Regenerate</button>
+          <button class="btn btn-ghost btn-sm" onclick="goBack(1)">Back</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Character -->
+      <div id="step-3" class="step-panel hidden">
+        <div class="panel-title">Choose your anchor</div>
+        <div class="panel-subtitle">Pick a character to present your reel, or describe your own.</div>
+        <div id="char-loading" class="loading-state hidden"><span class="spinner"></span> Generating character options...</div>
+        <div id="char-options"></div>
+        <div class="field" style="margin-top:16px">
+          <label>Or describe your own</label>
+          <textarea id="inp-custom-char" rows="2" placeholder="e.g., A 28-year-old Korean woman, athletic build, wearing a white polo..."></textarea>
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-primary" id="btn-approve-char" onclick="approveCharacter()" disabled>Continue</button>
+          <button class="btn btn-ghost" onclick="generateCustomCharacter()">Use Custom</button>
+          <button class="btn btn-ghost btn-sm" onclick="regenerateCharacters()">Regenerate</button>
+          <button class="btn btn-ghost btn-sm" onclick="goBack(2)">Back</button>
+        </div>
+      </div>
+
+      <!-- Step 4: Finalize -->
+      <div id="step-4" class="step-panel hidden">
+        <div class="panel-title">Final review</div>
+        <div class="panel-subtitle">Everything look good? Hit create and we'll build your reel.</div>
+        <div id="assembly-loading" class="loading-state hidden"><span class="spinner"></span> Assembling full script...</div>
+        <div id="assembly-summary"></div>
+        <div id="assembly-scenes"></div>
+        <div class="field" style="margin-top:16px">
+          <label>Edit instructions</label>
+          <textarea id="inp-edit-assembly" rows="2" placeholder="e.g., Change scene 4 video prompt to show a forest instead..."></textarea>
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-primary" onclick="createReel()" id="btn-create-reel">Create My Reel</button>
+          <button class="btn btn-ghost" onclick="editAssembly()">Apply Edits</button>
+          <button class="btn btn-ghost btn-sm" onclick="regenerateAssembly()">Regenerate</button>
+          <button class="btn btn-ghost btn-sm" onclick="goBack(3)">Back</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════ PROGRESS VIEW ═══════════════ -->
+    <div id="view-progress" class="hidden">
+      <div class="progress-view">
+        <div class="phase-icon"><div class="dot"></div></div>
+        <div class="phase-text" id="phase-text">Preparing...</div>
+        <div class="phase-sub" id="phase-sub">Your reel is being crafted</div>
+        <div class="progress-track">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <div class="time-remaining" id="time-remaining"></div>
+      </div>
+    </div>
+
+    <!-- ═══════════════ COMPLETE VIEW ═══════════════ -->
+    <div id="view-complete" class="hidden">
+      <div class="complete-view">
+        <div class="complete-check">
+          <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <div class="complete-title">Your reel is ready.</div>
+        <div class="complete-sub" id="complete-sub">Crafted and assembled, just for you.</div>
+        <a class="btn-download" id="download-link" href="#" download>Download Reel</a>
+        <button class="create-another" onclick="startOver()">Create another reel</button>
+      </div>
+    </div>
+
+    <!-- ═══════════════ ERROR VIEW ═══════════════ -->
+    <div id="view-error" class="hidden">
+      <div class="error-view">
+        <div class="error-icon">
+          <svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </div>
+        <div class="panel-title">Something went wrong</div>
+        <div class="error-message" id="error-message">An error occurred during reel generation.</div>
+        <div class="btn-group" style="justify-content:center">
+          <button class="btn btn-primary" onclick="retryPipeline()">Try Again</button>
+          <button class="btn btn-ghost" onclick="startOver()">Start Over</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // ═══════════════ STATE ═══════════════
+    const state = {
+      theme: '', topic: '', duration: 40, userScript: '',
+      scenes: [],
+      characters: [],
+      selectedCharacter: null,
+      fullScript: null,
+      savedPath: null,
+      pipelineStartTime: null,
+    };
+    let eventSource = null;
+
+    // ═══════════════ VIEW MANAGEMENT ═══════════════
+    function showView(view) {
+      ['view-create', 'view-progress', 'view-complete', 'view-error'].forEach(v =>
+        document.getElementById(v).classList.add('hidden'));
+      document.getElementById(`view-${view}`).classList.remove('hidden');
+    }
+
+    // ═══════════════ STEPPER ═══════════════
+    function updateStepper(active) {
+      for (let i = 1; i <= 4; i++) {
+        const dot = document.getElementById(`dot-${i}`);
+        const line = document.getElementById(`line-${i}`);
+        dot.className = 'stepper-dot';
+        if (i < active) dot.classList.add('done');
+        else if (i === active) dot.classList.add('active');
+        if (line) {
+          line.className = 'stepper-line';
+          if (i < active) line.classList.add('done');
+        }
+      }
+    }
+
+    function showStep(n) {
+      for (let i = 1; i <= 4; i++)
+        document.getElementById(`step-${i}`).classList.add('hidden');
+      document.getElementById(`step-${n}`).classList.remove('hidden');
+      updateStepper(n);
+    }
+
+    function goBack(n) { showStep(n); }
+
+    // ═══════════════ API ═══════════════
+    async function apiPost(url, body) {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || 'Request failed');
+      return data;
+    }
+
+    // ═══════════════ STEP 1 → 2: NARRATION ═══════════════
+    async function goToNarration() {
+      state.theme = document.getElementById('inp-theme').value.trim();
+      state.topic = document.getElementById('inp-topic').value.trim();
+      state.duration = parseInt(document.getElementById('inp-duration').value) || 40;
+      state.userScript = document.getElementById('inp-script').value.trim();
+
+      if (!state.theme || !state.topic) {
+        alert('Please enter both theme and topic.');
+        return;
+      }
+      showStep(2);
+      await generateNarration();
+    }
+
+    async function generateNarration() {
+      const loading = document.getElementById('narration-loading');
+      loading.classList.remove('hidden');
+      document.getElementById('narration-scenes').innerHTML = '';
+      document.getElementById('narration-stats').classList.add('hidden');
+      try {
+        const data = await apiPost('/api/generate-narration', {
+          theme: state.theme, topic: state.topic,
+          duration: state.duration, script: state.userScript
+        });
+        state.scenes = data.scenes;
+        renderScenes(state.scenes);
+      } catch (e) {
+        alert('Error: ' + e.message);
+      } finally {
+        loading.classList.add('hidden');
+      }
+    }
+
+    function renderScenes(scenes) {
+      const el = document.getElementById('narration-scenes');
+      let words = 0;
+      el.innerHTML = scenes.map(s => {
+        words += (s.narration_text || '').split(/\s+/).length;
+        return `<div class="scene-item">
+          <div class="scene-meta">
+            <span class="scene-tag ${s.type}">${s.type}</span>
+            <span class="scene-purpose">${s.purpose || ''}</span>
+            <span class="scene-emotion">${s.voice_emotion || ''}</span>
+          </div>
+          <div class="scene-text">"${s.narration_text || s.text || ''}"</div>
+          <div class="scene-caption">${s.caption_text || ''}</div>
+        </div>`;
+      }).join('');
+      const stats = document.getElementById('narration-stats');
+      stats.textContent = `${scenes.length} scenes / ${words} words / ~${Math.round(words / 2.5)}s estimated`;
+      stats.classList.remove('hidden');
+    }
+
+    async function editNarration() {
+      const feedback = document.getElementById('inp-edit-narration').value.trim();
+      if (!feedback) return;
+      const loading = document.getElementById('narration-loading');
+      loading.classList.remove('hidden');
+      try {
+        const data = await apiPost('/api/edit-narration', {
+          scenes: state.scenes, feedback
+        });
+        state.scenes = data.scenes;
+        renderScenes(state.scenes);
+        document.getElementById('inp-edit-narration').value = '';
+      } catch (e) {
+        alert('Error: ' + e.message);
+      } finally {
+        loading.classList.add('hidden');
+      }
+    }
+
+    async function regenerateNarration() {
+      await generateNarration();
+    }
+
+    // ═══════════════ STEP 2 → 3: CHARACTER ═══════════════
+    async function approveNarration() {
+      showStep(3);
+      await generateCharacters();
+    }
+
+    async function generateCharacters() {
+      const loading = document.getElementById('char-loading');
+      loading.classList.remove('hidden');
+      document.getElementById('char-options').innerHTML = '';
+      state.selectedCharacter = null;
+      document.getElementById('btn-approve-char').disabled = true;
+      try {
+        const data = await apiPost('/api/generate-characters', {
+          theme: state.theme, topic: state.topic, scenes: state.scenes
+        });
+        state.characters = data.characters;
+        renderCharacters(state.characters);
+      } catch (e) {
+        alert('Error: ' + e.message);
+      } finally {
+        loading.classList.add('hidden');
+      }
+    }
+
+    function renderCharacters(chars) {
+      document.getElementById('char-options').innerHTML = chars.map((c, i) => {
+        const v = c.voice || {};
+        return `<div class="char-option" onclick="selectChar(${i})" id="char-${i}">
+          <div class="char-label">Option ${i + 1}</div>
+          <div class="char-desc">${c.description || ''}</div>
+          <div class="char-voice">${v.gender || '?'} / ${v.accent || '?'} / ${v.tone || '?'}</div>
+        </div>`;
+      }).join('');
+    }
+
+    function selectChar(i) {
+      document.querySelectorAll('.char-option').forEach(c => c.classList.remove('selected'));
+      document.getElementById(`char-${i}`).classList.add('selected');
+      state.selectedCharacter = state.characters[i];
+      document.getElementById('btn-approve-char').disabled = false;
+    }
+
+    async function generateCustomCharacter() {
+      const desc = document.getElementById('inp-custom-char').value.trim();
+      if (!desc) return;
+      const loading = document.getElementById('char-loading');
+      loading.classList.remove('hidden');
+      try {
+        const data = await apiPost('/api/custom-character', {
+          description: desc, topic: state.topic
+        });
+        state.selectedCharacter = data.character;
+        state.characters.push(data.character);
+        renderCharacters(state.characters);
+        selectChar(state.characters.length - 1);
+      } catch (e) {
+        alert('Error: ' + e.message);
+      } finally {
+        loading.classList.add('hidden');
+      }
+    }
+
+    async function regenerateCharacters() {
+      await generateCharacters();
+    }
+
+    // ═══════════════ STEP 3 → 4: ASSEMBLY ═══════════════
+    async function approveCharacter() {
+      if (!state.selectedCharacter) return;
+      showStep(4);
+      await assembleScript();
+    }
+
+    async function assembleScript() {
+      const loading = document.getElementById('assembly-loading');
+      loading.classList.remove('hidden');
+      document.getElementById('assembly-summary').innerHTML = '';
+      document.getElementById('assembly-scenes').innerHTML = '';
+      try {
+        const data = await apiPost('/api/assemble-script', {
+          theme: state.theme, topic: state.topic,
+          duration: state.duration, scenes: state.scenes,
+          character: state.selectedCharacter
+        });
+        state.fullScript = data.script;
+        renderAssembly(state.fullScript);
+      } catch (e) {
+        alert('Error: ' + e.message);
+      } finally {
+        loading.classList.add('hidden');
+      }
+    }
+
+    function renderAssembly(script) {
+      const scenes = script.scenes || [];
+      const anchors = scenes.filter(s => s.type === 'anchor').length;
+      const brolls = scenes.filter(s => s.type === 'b-roll').length;
+      const music = (script.audio || {}).background_music || {};
+      const char = script.anchor_character || {};
+      let clips = 0;
+      scenes.forEach(s => {
+        const vg = s.video_generation || {};
+        clips += vg.clips ? vg.clips.length : 1;
+      });
+
+      document.getElementById('assembly-summary').innerHTML = `
+        <div class="summary-row">
+          <div class="summary-stat"><div class="stat-label">Scenes</div><div class="stat-value">${scenes.length}</div></div>
+          <div class="summary-stat"><div class="stat-label">Clips</div><div class="stat-value">${clips}</div></div>
+          <div class="summary-stat"><div class="stat-label">Music</div><div class="stat-value">${music.genre || '?'}</div></div>
+          <div class="summary-stat"><div class="stat-label">Est. Duration</div><div class="stat-value">~${state.duration || 40}s</div></div>
+        </div>`;
+
+      document.getElementById('assembly-scenes').innerHTML = scenes.map(s =>
+        `<div class="scene-item">
+          <div class="scene-meta">
+            <span class="scene-tag ${s.type}">${s.type}</span>
+            <span class="scene-purpose">Scene ${s.scene_id}</span>
+            <span class="scene-emotion">${s.voice_emotion || ''}</span>
+          </div>
+          <div class="scene-text">"${s.narration_text || s.text || ''}"</div>
+        </div>`
+      ).join('');
+    }
+
+    async function editAssembly() {
+      const feedback = document.getElementById('inp-edit-assembly').value.trim();
+      if (!feedback) return;
+      const loading = document.getElementById('assembly-loading');
+      loading.classList.remove('hidden');
+      try {
+        const data = await apiPost('/api/edit-script', {
+          script: state.fullScript, feedback
+        });
+        state.fullScript = data.script;
+        renderAssembly(state.fullScript);
+        document.getElementById('inp-edit-assembly').value = '';
+      } catch (e) {
+        alert('Error: ' + e.message);
+      } finally {
+        loading.classList.add('hidden');
+      }
+    }
+
+    async function regenerateAssembly() {
+      await assembleScript();
+    }
+
+    // ═══════════════ CREATE REEL (SAVE + AUTO PIPELINE) ═══════════════
+    async function createReel() {
+      const btn = document.getElementById('btn-create-reel');
+      btn.disabled = true;
+      btn.textContent = 'Starting...';
+
+      try {
+        // Save script
+        const saveData = await apiPost('/api/save-script', {
+          topic: state.topic, script: state.fullScript
+        });
+        state.savedPath = saveData.path;
+
+        // Switch to progress view
+        showView('progress');
+        state.pipelineStartTime = Date.now();
+        connectSSE();
+
+        // Start auto pipeline
+        await apiPost('/api/pipeline/start', {
+          script_path: saveData.path,
+          speed: 1.3,
+          audio_mode: 'option-c',
+          no_captions: false,
+          start_from: 1,
+          auto_go: true,
+          music_volume: 0.10,
+          voice_volume: 1.5,
+        });
+      } catch (e) {
+        showView('error');
+        document.getElementById('error-message').textContent = e.message;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Create My Reel';
+      }
+    }
+
+    // ═══════════════ SSE (Live Updates) ═══════════════
+    function connectSSE() {
+      if (eventSource) eventSource.close();
+      eventSource = new EventSource('/api/events');
+      eventSource.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+        switch (data.type) {
+          case 'phase':
+            document.getElementById('phase-text').textContent = data.message || '';
+            if (data.remaining_seconds != null) {
+              const mins = Math.ceil(data.remaining_seconds / 60);
+              document.getElementById('time-remaining').textContent =
+                mins <= 1 ? 'Less than a minute remaining' : `~${mins} minutes remaining`;
+            }
+            if (data.progress != null) {
+              document.getElementById('progress-fill').style.width = data.progress + '%';
+            }
+            break;
+          case 'pipeline_done':
+            if (eventSource) eventSource.close();
+            if (data.success && data.download_path) {
+              document.getElementById('download-link').href =
+                '/api/download?path=' + encodeURIComponent(data.download_path);
+              const elapsed = Math.round((Date.now() - state.pipelineStartTime) / 1000);
+              const mins = Math.floor(elapsed / 60);
+              const secs = elapsed % 60;
+              document.getElementById('complete-sub').textContent =
+                `Crafted in ${mins}m ${secs}s. Ready to share.`;
+              showView('complete');
+            } else {
+              showView('error');
+              document.getElementById('error-message').textContent =
+                data.error || 'Pipeline finished with errors. Check logs for details.';
+            }
+            break;
+          case 'pipeline_error':
+            if (eventSource) eventSource.close();
+            showView('error');
+            document.getElementById('error-message').textContent =
+              data.error || 'An unexpected error occurred.';
+            break;
+          case 'ping':
+            break;
+        }
+      };
+      eventSource.onerror = () => {
+        // SSE will auto-reconnect
+      };
+    }
+
+    // ═══════════════ RETRY / START OVER ═══════════════
+    async function retryPipeline() {
+      if (!state.savedPath) { startOver(); return; }
+      showView('progress');
+      state.pipelineStartTime = Date.now();
+      document.getElementById('phase-text').textContent = 'Retrying...';
+      document.getElementById('progress-fill').style.width = '0%';
+      connectSSE();
+      try {
+        await apiPost('/api/pipeline/start', {
+          script_path: state.savedPath,
+          speed: 1.3,
+          audio_mode: 'option-c',
+          no_captions: false,
+          start_from: 1,
+          auto_go: true,
+          music_volume: 0.10,
+          voice_volume: 1.5,
+        });
+      } catch (e) {
+        showView('error');
+        document.getElementById('error-message').textContent = e.message;
+      }
+    }
+
+    function startOver() {
+      if (eventSource) eventSource.close();
+      state.scenes = [];
+      state.characters = [];
+      state.selectedCharacter = null;
+      state.fullScript = null;
+      state.savedPath = null;
+      document.getElementById('inp-theme').value = '';
+      document.getElementById('inp-topic').value = '';
+      document.getElementById('inp-duration').value = '40';
+      document.getElementById('inp-script').value = '';
+      showView('create');
+      showStep(1);
+    }
+  </script>
+</body>
+</html>

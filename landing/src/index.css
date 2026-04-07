@@ -1,0 +1,238 @@
+@import "tailwindcss";
+
+/* ─── Design Tokens ─── */
+@theme {
+  --color-void: #0A0A0A;
+  --color-void-light: #111111;
+  --color-surface: #1A1816;
+  --color-surface-raised: #252220;
+  --color-border: #3A3530;
+  --color-border-subtle: #2A2520;
+  --color-amber: #D97706;
+  --color-amber-hover: #B45309;
+  --color-amber-light: #F59E0B;
+  --color-amber-glow: rgba(217, 119, 6, 0.15);
+  --color-amber-glow-strong: rgba(217, 119, 6, 0.30);
+  --color-text: #FAF8F5;
+  --color-text-secondary: #A8A29E;
+  --color-text-muted: #6B6560;
+  --color-success: #059669;
+
+  --font-heading: "Outfit", sans-serif;
+  --font-drama: "Playfair Display", serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+/* ─── Base ─── */
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: var(--font-heading);
+  background: var(--color-void);
+  color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+  margin: 0;
+}
+
+/* ─── Noise Overlay ─── */
+.noise-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  opacity: 0.04;
+}
+.noise-overlay svg { width: 100%; height: 100%; }
+
+/* ─── Hero Background Mesh ─── */
+.hero-bg-mesh {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 80% 60% at 65% 40%, rgba(217, 119, 6, 0.12) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 80% at 30% 80%, rgba(217, 119, 6, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse 60% 40% at 80% 20%, rgba(245, 158, 11, 0.08) 0%, transparent 50%),
+    radial-gradient(circle at 50% 50%, rgba(26, 24, 22, 0.8) 0%, transparent 100%);
+}
+
+/* ─── Section Background Meshes ─── */
+.section-bg-mesh {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.section-bg-features {
+  background:
+    radial-gradient(ellipse 70% 50% at 20% 30%, rgba(217, 119, 6, 0.10) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 60% at 80% 70%, rgba(245, 158, 11, 0.07) 0%, transparent 50%),
+    linear-gradient(180deg, rgba(10, 10, 10, 0) 0%, rgba(17, 17, 17, 0.5) 100%);
+}
+.section-bg-philosophy {
+  background:
+    radial-gradient(ellipse 60% 80% at 70% 40%, rgba(217, 119, 6, 0.12) 0%, transparent 55%),
+    radial-gradient(ellipse 80% 40% at 10% 80%, rgba(180, 83, 9, 0.08) 0%, transparent 50%),
+    linear-gradient(135deg, rgba(17, 17, 17, 0.3) 0%, rgba(10, 10, 10, 0.6) 100%);
+}
+.section-bg-protocol {
+  background:
+    radial-gradient(ellipse 50% 60% at 80% 30%, rgba(217, 119, 6, 0.09) 0%, transparent 55%),
+    radial-gradient(ellipse 60% 50% at 10% 70%, rgba(245, 158, 11, 0.06) 0%, transparent 50%);
+}
+.section-bg-examples {
+  background:
+    radial-gradient(ellipse 70% 50% at 30% 40%, rgba(217, 119, 6, 0.10) 0%, transparent 55%),
+    radial-gradient(ellipse 50% 70% at 90% 60%, rgba(180, 83, 9, 0.07) 0%, transparent 50%);
+}
+.section-bg-cta {
+  background:
+    radial-gradient(ellipse 60% 60% at 50% 50%, rgba(217, 119, 6, 0.14) 0%, transparent 55%),
+    radial-gradient(ellipse 80% 40% at 20% 30%, rgba(245, 158, 11, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse 80% 40% at 80% 70%, rgba(180, 83, 9, 0.06) 0%, transparent 50%);
+}
+
+/* ─── Section Transitions (smooth gradient dividers) ─── */
+section + section::before {
+  content: '';
+  display: block;
+  position: absolute;
+  top: -80px;
+  left: 0;
+  right: 0;
+  height: 160px;
+  background: linear-gradient(to bottom, transparent 0%, currentColor 50%, transparent 100%);
+  opacity: 0.02;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ─── Hero Gradient (bottom fade to void) ─── */
+.hero-gradient {
+  background: linear-gradient(
+    to top,
+    var(--color-void) 0%,
+    transparent 50%
+  );
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 25%;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* ─── Magnetic Buttons ─── */
+.btn-magnetic {
+  transition: transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94), box-shadow 0.3s ease;
+}
+.btn-magnetic:hover { transform: scale(1.03) translateY(-1px); }
+.btn-magnetic:active { transform: scale(0.97); }
+
+/* ─── Card Hover Glow ─── */
+.card-surface {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 2rem;
+  transition: border-color 0.4s ease, box-shadow 0.4s ease;
+}
+.card-surface:hover {
+  border-color: var(--color-border);
+  box-shadow: 0 0 40px var(--color-amber-glow);
+}
+
+/* ─── Typewriter Cursor ─── */
+.cursor-blink { animation: blink 1s step-end infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* ─── Pulse Dot ─── */
+.pulse-dot { animation: pulse-anim 2s ease-in-out infinite; }
+@keyframes pulse-anim {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(1.5); }
+}
+
+/* ═══════════════════════════════════════════
+   3D PHONE CAROUSEL
+   ═══════════════════════════════════════════ */
+.phone-carousel-stage {
+  perspective: 1200px;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.phone-carousel-ring {
+  position: relative;
+  width: 360px;
+  height: 680px;
+  transform-style: preserve-3d;
+}
+.phone-carousel-item {
+  position: absolute;
+  width: 280px;
+  left: 50%;
+  top: 50%;
+  margin-left: -140px;
+  margin-top: -300px;
+  transition: transform 0.8s cubic-bezier(0.34, 1.56, 0.64, 1),
+              opacity 0.6s ease,
+              filter 0.6s ease;
+  will-change: transform, opacity, filter;
+}
+
+/* ─── Phone Frame ─── */
+.phone-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 9 / 19.5;
+  background: #1A1816;
+  border-radius: 2.4rem;
+  border: 3px solid #3A3530;
+  overflow: hidden;
+  box-shadow:
+    0 25px 60px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 0 80px rgba(217, 119, 6, 0.08);
+  transition: box-shadow 0.6s ease, border-color 0.6s ease;
+}
+.phone-notch {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 35%;
+  height: 22px;
+  background: #0A0A0A;
+  border-radius: 0 0 1rem 1rem;
+  z-index: 10;
+}
+.phone-screen {
+  position: absolute;
+  inset: 0;
+  border-radius: 2.2rem;
+  overflow: hidden;
+}
+
+/* Active phone glow */
+.phone-active {
+  box-shadow:
+    0 30px 80px rgba(0, 0, 0, 0.7),
+    0 0 0 1px rgba(255, 255, 255, 0.06) inset,
+    0 0 60px rgba(217, 119, 6, 0.30),
+    0 0 140px rgba(217, 119, 6, 0.12);
+  border-color: rgba(217, 119, 6, 0.5);
+}
+
+/* ─── Stacking Cards ─── */
+.stack-card { will-change: transform, filter, opacity; }
+
+/* ─── GSAP initial state ─── */
+.gsap-reveal { opacity: 0; transform: translateY(40px); }
+
+/* ─── Scrollbar ─── */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }

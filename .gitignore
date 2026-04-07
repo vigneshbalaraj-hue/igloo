@@ -1,0 +1,37 @@
+# Sensitive credentials
+.env
+.env.local
+.env.*.local
+credentials.json
+token.json
+*.pem
+*.key
+
+# Intermediate files (always regenerated)
+.tmp/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node / Vite / Next.js
+node_modules/
+dist/
+build/
+.next/
+.vite/
+*.log
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Large reference / demo assets (kept locally, not pushed)
+Example reels created/
+AI_image_and_video_lessons/
+Examples/
