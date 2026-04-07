@@ -36,7 +36,10 @@ function Navbar() {
         ? 'bg-void/70 backdrop-blur-xl border border-border-subtle shadow-[0_8px_32px_rgba(0,0,0,0.4)]'
         : 'bg-transparent'
     }`}>
-      <a href="#" className="px-5 py-2 text-sm font-bold tracking-tight text-amber-light">Frameforge</a>
+      <a href="#" className="pl-3 pr-4 py-1 flex items-center gap-2">
+        <img src="/igloo-mark.png" alt="Igloo" className="h-7 w-7 object-contain" />
+        <span className="text-sm font-bold tracking-tight text-amber-light">Igloo</span>
+      </a>
       <div className="hidden md:flex items-center gap-1">
         <a href="#features" className="px-4 py-2 text-sm text-text-secondary hover:text-text transition-colors rounded-full">Features</a>
         <a href="#how-it-works" className="px-4 py-2 text-sm text-text-secondary hover:text-text transition-colors rounded-full">How It Works</a>
@@ -161,14 +164,15 @@ function Hero() {
         <p className="hero-line text-sm md:text-base font-mono text-amber-light tracking-widest uppercase mb-6">
           AI-Powered Video Engine
         </p>
-        <h1 className="hero-line font-heading text-5xl md:text-7xl lg:text-8xl font-800 tracking-[-0.03em] leading-[1.05] mb-2">
-          Frameforge
+        <h1 className="hero-line mb-2">
+          <img src="/igloo-wordmark.png" alt="Igloo" className="block w-[280px] md:w-[380px] lg:w-[460px] h-auto -ml-3" />
+          <span className="sr-only">Igloo</span>
         </h1>
         <p className="hero-line font-drama italic text-3xl md:text-5xl lg:text-6xl text-amber-light mb-4">
-          Cinema at the speed of thought.
+          Video that stops thumbs.
         </p>
         <p className="hero-line text-base md:text-lg text-text-secondary font-light max-w-[50ch] leading-relaxed mb-10">
-          Type a topic. Pick a character. Frameforge writes the script, generates visuals, composes music, and delivers your reel. All in minutes.
+          Type a topic. Pick a character. Igloo writes the script, generates visuals, composes music, and delivers your reel. All in minutes.
         </p>
         <div className="hero-cta flex flex-wrap gap-4">
           <a href="http://localhost:5000" className="btn-magnetic inline-flex items-center gap-3 px-8 py-4 bg-amber text-void font-bold rounded-2xl text-base hover:bg-amber-hover hover:shadow-[0_8px_40px_rgba(217,119,6,0.3)]">
@@ -432,7 +436,7 @@ function Philosophy() {
           <span className="font-drama italic text-amber-light">your idea.</span>
         </h2>
         <p className="phil-line text-base text-text-secondary font-light mt-8 max-w-[55ch] leading-relaxed">
-          Frameforge doesn't help you edit. It removes editing entirely. You think it, describe it, and download a finished reel with professional voiceover, generated visuals, and an original score.
+          Igloo doesn't help you edit. It removes editing entirely. You think it, describe it, and download a finished reel with professional voiceover, generated visuals, and an original score.
         </p>
       </div>
     </section>
@@ -462,7 +466,7 @@ function Protocol() {
     {
       num: '03',
       title: 'Download and post',
-      desc: 'Frameforge generates images, video clips, voiceover, and music. Assembles everything with captions and transitions. You download the final reel.',
+      desc: 'Igloo generates images, video clips, voiceover, and music. Assembles everything with captions and transitions. You download the final reel.',
       visual: 'waveform',
     },
   ]
@@ -665,7 +669,7 @@ function Examples() {
       <div className="max-w-[1400px] mx-auto relative">
         <p className="text-sm font-mono text-amber-light tracking-widest uppercase mb-4">Example reels</p>
         <h2 className="text-3xl md:text-5xl font-bold tracking-[-0.03em] mb-16">
-          Built with <span className="font-drama italic text-amber-light">Frameforge.</span>
+          Built with <span className="font-drama italic text-amber-light">Igloo.</span>
         </h2>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-5">
@@ -725,11 +729,11 @@ function Footer() {
   return (
     <footer className="relative bg-void-light rounded-t-[3rem] md:rounded-t-[4rem] py-16 px-6 md:px-16 overflow-hidden">
       <div className="max-w-[1200px] mx-auto relative">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-12 mb-16">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-12 mb-16">
           <div className="md:col-span-2">
-            <h3 className="text-lg font-bold text-amber-light mb-2">Frameforge</h3>
+            <img src="/igloo-wordmark.png" alt="Igloo" className="block w-[200px] h-auto -ml-2 mb-3" />
             <p className="text-sm text-text-muted font-light max-w-[35ch] leading-relaxed">
-              Cinema at the speed of thought. AI-powered reel creation from script to screen.
+              Video that stops thumbs. AI-powered reel creation from script to screen.
             </p>
           </div>
           <div>
@@ -738,6 +742,16 @@ function Footer() {
               <li><a href="#features" className="text-sm text-text-secondary hover:text-text transition-colors">Features</a></li>
               <li><a href="#how-it-works" className="text-sm text-text-secondary hover:text-text transition-colors">How It Works</a></li>
               <li><a href="#examples" className="text-sm text-text-secondary hover:text-text transition-colors">Examples</a></li>
+              <li><a href="/pricing.html" className="text-sm text-text-secondary hover:text-text transition-colors">Pricing</a></li>
+            </ul>
+          </div>
+          <div>
+            <h4 className="text-xs font-mono text-text-muted tracking-widest uppercase mb-4">Legal</h4>
+            <ul className="space-y-2">
+              <li><a href="/privacy.html" className="text-sm text-text-secondary hover:text-text transition-colors">Privacy</a></li>
+              <li><a href="/terms.html" className="text-sm text-text-secondary hover:text-text transition-colors">Terms</a></li>
+              <li><a href="/refund.html" className="text-sm text-text-secondary hover:text-text transition-colors">Refunds</a></li>
+              <li><a href="/contact.html" className="text-sm text-text-secondary hover:text-text transition-colors">Contact</a></li>
             </ul>
           </div>
         </div>
@@ -747,7 +761,7 @@ function Footer() {
             <span className="w-2 h-2 rounded-full bg-success pulse-dot" />
             System Operational
           </div>
-          <p className="text-xs text-text-muted">Frameforge. Built with deterministic AI pipelines.</p>
+          <p className="text-xs text-text-muted">Igloo. Built with deterministic AI pipelines.</p>
         </div>
       </div>
     </footer>

@@ -1,0 +1,77 @@
+:root {
+  --void: #0A0A0A;
+  --void-light: #121212;
+  --text: #F5F5F4;
+  --text-secondary: #A8A29E;
+  --text-muted: #78716C;
+  --amber: #D97706;
+  --amber-light: #F59E0B;
+  --border: #27272A;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--void);
+  color: var(--text);
+  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 760px; margin: 0 auto; padding: 80px 32px 120px; }
+header { display: flex; align-items: center; gap: 12px; margin-bottom: 64px; }
+header img { height: 36px; width: 36px; object-fit: contain; }
+header a { color: var(--amber-light); text-decoration: none; font-weight: 700; font-size: 16px; letter-spacing: -0.01em; }
+h1 { font-size: 48px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.1; margin-bottom: 8px; }
+.meta {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  margin-bottom: 48px;
+}
+h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; margin-top: 48px; margin-bottom: 16px; color: var(--text); }
+p { color: var(--text-secondary); font-size: 16px; margin-bottom: 16px; font-weight: 300; }
+ul { color: var(--text-secondary); padding-left: 24px; margin-bottom: 16px; font-weight: 300; }
+li { margin-bottom: 8px; }
+strong { color: var(--text); font-weight: 600; }
+a.inline { color: var(--amber-light); text-decoration: none; border-bottom: 1px solid rgba(245, 158, 11, 0.3); }
+a.inline:hover { border-bottom-color: var(--amber-light); }
+.callout {
+  margin: 24px 0;
+  padding: 20px 24px;
+  background: rgba(217, 119, 6, 0.06);
+  border-left: 3px solid var(--amber);
+  border-radius: 4px;
+  color: var(--text);
+  font-weight: 400;
+}
+.price-card {
+  margin: 40px 0;
+  padding: 40px 32px;
+  background: var(--void-light);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  text-align: center;
+}
+.price-card .amount { font-size: 56px; font-weight: 800; letter-spacing: -0.03em; color: var(--amber-light); line-height: 1; }
+.price-card .inr { font-size: 16px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; margin-top: 8px; }
+.price-card .what { margin-top: 16px; color: var(--text-secondary); font-size: 15px; }
+footer {
+  margin-top: 96px;
+  padding-top: 32px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+footer a { color: var(--text-muted); text-decoration: none; }
+footer a:hover { color: var(--text); }
+footer .links { display: flex; gap: 20px; flex-wrap: wrap; }
+@media (max-width: 600px) {
+  .wrap { padding: 56px 20px 80px; }
+  h1 { font-size: 36px; }
+  h2 { font-size: 20px; }
+}
