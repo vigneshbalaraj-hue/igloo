@@ -62,31 +62,6 @@ Errors are learning opportunities. When something breaks:
 
 **Key principle:** Local files are only for processing. Deliverables live in cloud services (Google Sheets, Slides, etc.) where the user can access them. Everything in `.tmp/` can be deleted and regenerated.
 
-## Cloud Webhooks (Modal)
-
-The system supports event-driven execution via Modal webhooks. Each webhook maps to exactly one directive with scoped tool access.
-
-**When user says "add a webhook that...":**
-1. Read `directives/add_webhook.md` for complete instructions
-2. Create the directive file in `directives/`
-3. Add entry to `execution/webhooks.json`
-4. Deploy: `modal deploy execution/modal_webhook.py`
-5. Test the endpoint
-
-**Key files:**
-- `execution/webhooks.json` - Webhook slug → directive mapping
-- `execution/modal_webhook.py` - Modal app (do not modify unless necessary)
-- `directives/add_webhook.md` - Complete setup guide
-
-**Endpoints:**
-- `https://nick-90891--claude-orchestrator-list-webhooks.modal.run` - List webhooks
-- `https://nick-90891--claude-orchestrator-directive.modal.run?slug={slug}` - Execute directive
-- `https://nick-90891--claude-orchestrator-test-email.modal.run` - Test email
-
-**Available tools for webhooks:** `send_email`, `read_sheet`, `update_sheet`
-
-**All webhook activity streams to Slack in real-time.**
-
 ## Context Window Management
 
 When the context window reaches ~85-90% capacity, you MUST:
@@ -110,4 +85,14 @@ You sit between human intent (directives) and deterministic execution (Python sc
 
 Be pragmatic. Be reliable. Self-anneal.
 
-Also, use Opus-4.5 for everything while building. It came out a few days ago and is an order of magnitude better than Sonnet and other models. If you can't find it, look it up first.
+## Current state (Igloo launch)
+
+**Latest checkpoint:** `.tmp/checkpoint_2026-04-08_session24.md` — start here.
+
+- Phases 1–8 ✅ complete. Sign up → buy → pipeline → admin review → customer download all working end-to-end locally.
+- **Next.js app** lives in `app/` (Next 16 + React 19 + Tailwind 4 + Clerk 7). Middleware file is `src/proxy.ts` (Next 16 rename), not `middleware.ts`. Razorpay is in TEST mode.
+- **Phase 9 next:** Vercel deploy + flip Razorpay to live + ₹420 end-to-end charge.
+- Modal trigger URL: `https://vigneshbalaraj-hue--igloo-trigger.modal.run`
+- Modal deploys must use `PYTHONIOENCODING=utf-8` prefix on Windows
+- Local webhook testing uses cloudflared tunnel — URL is ephemeral, dies on terminal close. Razorpay dashboard webhook will need re-pointing each restart until Vercel deploy.
+- Use local tsc (`./node_modules/.bin/tsc`) not `npx tsc` (npx grabs unrelated tsc@2 package).

@@ -18,6 +18,7 @@ Output:
 
 import argparse
 import json
+import os
 import re
 import sys
 import urllib.request
@@ -34,18 +35,21 @@ import prompt_bank as pb  # noqa: E402
 # ---------------------------------------------------------------------------
 
 def load_env(key: str) -> str:
+    # 1. Process environment (Modal secrets, CI, shell exports) — preferred
+    val = os.environ.get(key)
+    if val and not val.startswith("<"):
+        return val
+    # 2. Fall back to .env file (local dev convenience)
     env_path = Path(__file__).resolve().parent.parent / ".env"
-    if not env_path.exists():
-        print(f"ERROR: .env not found at {env_path}", file=sys.stderr)
-        sys.exit(1)
-    with open(env_path) as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith(f"{key}="):
-                val = line.split("=", 1)[1].strip().strip('"').strip("'")
-                if val and not val.startswith("<"):
-                    return val
-    print(f"ERROR: {key} not set in .env", file=sys.stderr)
+    if env_path.exists():
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(f"{key}="):
+                    v = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if v and not v.startswith("<"):
+                        return v
+    print(f"ERROR: {key} not set in environment or .env", file=sys.stderr)
     sys.exit(1)
 
 
@@ -71,15 +75,40 @@ def call_gemini(prompt: str, api_key: str, temperature: float = 0.5,
     }
 
     data = json.dumps(payload).encode()
-    req = urllib.request.Request(url, data=data, method="POST")
-    req.add_header("Content-Type", "application/json")
 
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            result = json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        body = e.read().decode() if e.fp else ""
-        print(f"ERROR: Gemini API returned {e.code}: {body}", file=sys.stderr)
+    # Retry on 429/5xx with exponential backoff. Gemini 2.5 Flash returns 503
+    # "high demand" transient errors fairly often; blocking once on this would
+    # fail production runs unnecessarily. Max ~90s total wait.
+    import time as _time
+    backoffs = [5, 10, 20, 40]
+    last_err = None
+    result = None
+    for attempt, wait_s in enumerate([0] + backoffs):
+        if wait_s:
+            print(f"  [gemini] Retry {attempt}/{len(backoffs)} after {wait_s}s "
+                  f"(last: {last_err})", file=sys.stderr)
+            _time.sleep(wait_s)
+        req = urllib.request.Request(url, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                result = json.loads(resp.read().decode())
+            break
+        except urllib.error.HTTPError as e:
+            body = e.read().decode() if e.fp else ""
+            last_err = f"HTTP {e.code}"
+            # Retry on 429 (rate limit) and 5xx (server)
+            if e.code == 429 or 500 <= e.code < 600:
+                continue
+            print(f"ERROR: Gemini API returned {e.code}: {body}", file=sys.stderr)
+            sys.exit(1)
+        except urllib.error.URLError as e:
+            last_err = f"URLError: {e.reason}"
+            continue
+
+    if result is None:
+        print(f"ERROR: Gemini API failed after {len(backoffs) + 1} attempts: {last_err}",
+              file=sys.stderr)
         sys.exit(1)
 
     parts = result["candidates"][0]["content"]["parts"]
@@ -115,8 +144,21 @@ def parse_json_response(text: str) -> dict | list:
         raise
 
 
-def prompt_user(message: str, valid: list[str]) -> str:
+# Module-level flag toggled by --non-interactive. When True, prompt_user
+# returns the passed-in `default` instead of blocking on input(). Used by
+# Modal/CI runs where stdin is closed.
+NON_INTERACTIVE = False
+
+
+def prompt_user(message: str, valid: list[str], default: str | None = None) -> str:
     """Prompt user for input, validating against allowed values."""
+    if NON_INTERACTIVE:
+        if default is None:
+            print(f"ERROR: prompt_user called in non-interactive mode without "
+                  f"a default for: {message}", file=sys.stderr)
+            sys.exit(1)
+        print(f"{message} [auto: {default}]")
+        return default
     valid_lower = [v.lower() for v in valid]
     while True:
         response = input(f"{message} ").strip()
@@ -270,7 +312,8 @@ def generate_narration(theme: str, topic: str, duration: int,
 
         choice = prompt_user(
             "  [A]pprove  [E]dit  [R]egenerate  [Q]uit:",
-            ["a", "approve", "e", "edit", "r", "regenerate", "q", "quit"])
+            ["a", "approve", "e", "edit", "r", "regenerate", "q", "quit"],
+            default="a")
 
         if choice in ("a", "approve"):
             print("  Script locked.")
@@ -358,7 +401,8 @@ def select_character(theme: str, topic: str, scenes: list,
         print_divider()
         choice = prompt_user(
             "  [1/2/3] to select  [C]ustom  [R]egenerate  [Q]uit:",
-            ["1", "2", "3", "c", "custom", "r", "regenerate", "q", "quit"])
+            ["1", "2", "3", "c", "custom", "r", "regenerate", "q", "quit"],
+            default="1")
 
         if choice in ("1", "2", "3"):
             selected = options[int(choice) - 1]
@@ -383,7 +427,8 @@ def select_character(theme: str, topic: str, scenes: list,
             print(f"  Voice: {voice.get('gender', '?')}, {voice.get('accent', '?')}, {voice.get('tone', '?')}")
 
             ok = prompt_user("  [A]pprove  [C]ustom again  [B]ack to options:",
-                             ["a", "approve", "c", "custom", "b", "back"])
+                             ["a", "approve", "c", "custom", "b", "back"],
+                             default="a")
             if ok in ("a", "approve"):
                 return {
                     "description": custom["description"],
@@ -596,7 +641,8 @@ def assemble_full_json(theme: str, topic: str, slug: str, duration: int,
         print_divider()
         choice = prompt_user(
             "  [A]pprove and save  [E]dit  [R]egenerate  [Q]uit:",
-            ["a", "approve", "e", "edit", "r", "regenerate", "q", "quit"])
+            ["a", "approve", "e", "edit", "r", "regenerate", "q", "quit"],
+            default="a")
 
         if choice in ("a", "approve"):
             return script_json
@@ -650,7 +696,15 @@ def main():
                         help="Target duration in seconds (default: 40)")
     parser.add_argument("--output-dir", default=None,
                         help="Output directory (default: .tmp/{topic_slug}/)")
+    parser.add_argument("--non-interactive", action="store_true",
+                        help="Auto-approve all review prompts. For Modal/CI runs "
+                             "where stdin is closed. Defaults: approve narration, "
+                             "pick character option 1, approve final script.")
     args = parser.parse_args()
+
+    if args.non_interactive:
+        global NON_INTERACTIVE
+        NON_INTERACTIVE = True
 
     api_key = load_env("GEMINI_API_KEY")
     # Voice ID drives the calibrated word-count target so the script Gemini
@@ -682,7 +736,8 @@ def main():
     if output_path.exists():
         choice = prompt_user(
             f"\n  Script already exists at {output_path}\n  [O]verwrite  [Q]uit:",
-            ["o", "overwrite", "q", "quit"])
+            ["o", "overwrite", "q", "quit"],
+            default="o")
         if choice in ("q", "quit"):
             print("  Aborted.")
             sys.exit(0)

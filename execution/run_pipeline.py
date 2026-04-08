@@ -18,6 +18,7 @@ Usage:
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -33,7 +34,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # ---------------------------------------------------------------------------
 
 def load_env_value(key: str) -> str | None:
-    """Read a key from .env. Returns None if not found (does NOT exit)."""
+    """Read a key from process env or .env. Returns None if not found (does NOT exit)."""
+    # 1. Process environment (Modal secrets, CI, shell exports) — preferred
+    val = os.environ.get(key)
+    if val and not val.startswith("<"):
+        return val
+    # 2. Fall back to .env file (local dev convenience)
     env_path = PROJECT_ROOT / ".env"
     if not env_path.exists():
         return None
@@ -209,6 +215,8 @@ def _build_cmd_step0(ctx: dict) -> list[str]:
         cmd.extend(["--script", ctx["script_text"]])
     if ctx.get("output_dir"):
         cmd.extend(["--output-dir", str(ctx["output_dir"])])
+    if ctx.get("auto_go"):
+        cmd.append("--non-interactive")
     return cmd
 
 
@@ -551,6 +559,10 @@ def main():
                         help="Skip all gates, run fully automated")
     parser.add_argument("--dry-run", action="store_true",
                         help="Show what would run, don't execute")
+    parser.add_argument("--workdir", default=None,
+                        help="Override output dir for this run. Falls back to "
+                             "IGLOO_WORKDIR env var, then PROJECT_ROOT/.tmp/<slug>. "
+                             "Use this for concurrency-safe runs (e.g. Modal workers).")
     args = parser.parse_args()
 
     # --- Validate args ---
@@ -576,19 +588,32 @@ def main():
         "theme": args.theme,
         "topic": args.topic,
         "script_text": args.script_text,
+        "auto_go": args.auto_go,
     }
+
+    # Resolve workdir override (CLI flag > env var > None)
+    workdir_override = args.workdir or os.environ.get("IGLOO_WORKDIR")
 
     if args.new:
         # Slug for output dir
         import re
         slug = re.sub(r'[^a-z0-9\s-]', '', args.topic.lower().strip())
         slug = re.sub(r'[\s-]+', '_', slug).strip('_')
-        output_dir = PROJECT_ROOT / ".tmp" / slug
+        if workdir_override:
+            output_dir = Path(workdir_override).resolve()
+        else:
+            output_dir = PROJECT_ROOT / ".tmp" / slug
         ctx["output_dir"] = output_dir
         ctx["script_dir"] = output_dir
         ctx["script_path"] = str(output_dir / f"{slug}_script.json")
         ctx["script_data"] = {}
     else:
+        # Existing-script mode: workdir override is ignored — script's parent
+        # dir is authoritative (the script and its sibling artifacts already
+        # live together). Workdir override only makes sense for fresh runs.
+        if workdir_override:
+            print(f"  WARNING: --workdir/IGLOO_WORKDIR ignored in existing-script mode "
+                  f"(script's parent dir is used)")
         script_path = Path(args.script).resolve()
         ctx["script_path"] = str(script_path)
         ctx["script_dir"] = script_path.parent

@@ -28,6 +28,7 @@ Output:
 import argparse
 import base64
 import json
+import os
 import re
 import subprocess
 import sys
@@ -139,18 +140,21 @@ def annotate(text: str, phase: str) -> str:
 
 
 def load_env(key: str) -> str:
+    # 1. Process environment (Modal secrets, CI, shell exports) — preferred
+    val = os.environ.get(key)
+    if val and not val.startswith("<"):
+        return val
+    # 2. Fall back to .env file (local dev convenience)
     env_path = Path(__file__).resolve().parent.parent / ".env"
-    if not env_path.exists():
-        print(f"ERROR: .env not found at {env_path}", file=sys.stderr)
-        sys.exit(1)
-    with open(env_path) as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith(f"{key}="):
-                val = line.split("=", 1)[1].strip().strip('"').strip("'")
-                if val and not val.startswith("<"):
-                    return val
-    print(f"ERROR: {key} not set in .env", file=sys.stderr)
+    if env_path.exists():
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(f"{key}="):
+                    v = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if v and not v.startswith("<"):
+                        return v
+    print(f"ERROR: {key} not set in environment or .env", file=sys.stderr)
     sys.exit(1)
 
 
