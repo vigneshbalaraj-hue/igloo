@@ -91,6 +91,17 @@ def extract_clip_order(script: dict, total_duration: float = 33.86) -> list:
                 "narration_end": scene.get("narration_end"),
             })
 
+    # Drop clips with no narration timing (e.g. scenes whose narration came back
+    # empty upstream — those produce narration_start=None and crash the trim math
+    # below). Skipping them lets the previous clip extend naturally to fill the gap.
+    skipped = [c["name"] for c in raw if c["narration_start"] is None]
+    if skipped:
+        print(f"WARNING: skipping {len(skipped)} clip(s) with no narration_start: {skipped}")
+    raw = [c for c in raw if c["narration_start"] is not None]
+
+    if not raw:
+        raise ValueError("extract_clip_order: no clips with valid narration_start")
+
     # Each clip spans start-to-start of next scene
     for i in range(len(raw)):
         if i < len(raw) - 1:
@@ -103,51 +114,45 @@ def extract_clip_order(script: dict, total_duration: float = 33.86) -> list:
 
 # ========== VIDEO OPERATIONS ==========
 
-def trim_clip(input_path: Path, output_path: Path, duration: float, start_offset: float = 0.0):
-    """Trim clip to target duration. If source is shorter, freeze last frame to pad."""
+def trim_and_normalize(input_path: Path, output_path: Path, duration: float, start_offset: float = 0.0):
+    """Trim clip to target duration AND normalize resolution in a single ffmpeg pass.
+
+    Merges the old trim_clip + normalize_clip into one decode→encode cycle (A2 optimisation).
+    Source is trimmed/padded to `duration`, then scaled to 1080×1920@30fps.
+    """
+    NORM_VF = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1"
     ss_args = ["-ss", f"{start_offset:.3f}"] if start_offset > 0 else []
 
-    # Check source duration first
     src_dur = get_duration(input_path) - start_offset
     if src_dur >= duration - 0.01:
-        # Source is long enough — simple trim
-        run_ffmpeg(
-            ss_args + [
-                "-i", str(input_path),
-                "-t", f"{duration:.3f}",
-                "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-                "-an",
-                str(output_path)
-            ], f"trim {input_path.name} to {duration:.2f}s (offset={start_offset:.2f}s)"
-        )
+        vf = NORM_VF
+        label = f"trim+norm {input_path.name} to {duration:.2f}s"
     else:
-        # Source is too short — trim then pad with frozen last frame using tpad
         pad_dur = duration - src_dur
-        run_ffmpeg(
-            ss_args + [
-                "-i", str(input_path),
-                "-vf", f"tpad=stop_mode=clone:stop_duration={pad_dur:.3f}",
-                "-t", f"{duration:.3f}",
-                "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-                "-an",
-                str(output_path)
-            ], f"trim+pad {input_path.name} to {duration:.2f}s (pad={pad_dur:.2f}s)"
-        )
+        vf = f"tpad=stop_mode=clone:stop_duration={pad_dur:.3f},{NORM_VF}"
+        label = f"trim+pad+norm {input_path.name} to {duration:.2f}s (pad={pad_dur:.2f}s)"
 
-
-def normalize_clip(input_path: Path, output_path: Path):
-    run_ffmpeg([
-        "-i", str(input_path),
-        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1",
-        "-r", "30",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-        "-an",
-        str(output_path)
-    ], f"normalize {input_path.stem}")
+    run_ffmpeg(
+        ss_args + [
+            "-i", str(input_path),
+            "-t", f"{duration:.3f}",
+            "-vf", vf,
+            "-r", "30",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+            "-an",
+            str(output_path)
+        ], label
+    )
 
 
 def build_xfade_concat(clips: list, output_path: Path, fade_dur: float = XFADE_DURATION, verbose: bool = False):
     """Concatenate clips with xfade cross transitions.
+
+    Single-filtergraph chain — one ffmpeg invocation, N inputs, N-1 chained
+    xfades. Memory is O(N) (ffmpeg demuxes all input streams concurrently),
+    which is fine on shared-cpu-2x/4gb but OOM'd on shared-cpu-1x/2gb. See
+    fly.toml [[vm]] comments and s32 checkpoint for the bounded-N + vertical-
+    scaling rationale (the s31 pairwise refactor was reverted in s32).
 
     To preserve total duration matching the voiceover, each clip (except last)
     is extended by fade_dur so the overlap doesn't shrink the timeline.
@@ -553,21 +558,38 @@ def ass_word_wrap(text: str, max_chars: int = 25) -> str:
     return "\\N".join(lines)
 
 
-def burn_subtitles(video_path: Path, ass_path: Path, font_dir: Path, output_path: Path):
-    """Burn ASS subtitles into video with embedded fonts."""
-    # ffmpeg subtitles filter with fontsdir for custom font
+def burn_subtitles(video_path: Path, ass_path: Path, font_dir: Path, output_path: Path,
+                   speed: float = 1.0):
+    """Burn ASS subtitles into video, optionally applying speed-adjust in the same pass.
+
+    A1 optimisation: when speed != 1.0, the subtitles filter reads frames at their
+    original 1.0× PTS (so ASS timestamps align correctly), then setpts compresses
+    the timeline. This replaces two separate libx264 encodes with one.
+    """
     fonts_dir_str = str(font_dir.resolve()).replace("\\", "/").replace(":", "\\:")
     ass_str = str(ass_path.resolve()).replace("\\", "/").replace(":", "\\:")
 
-    vf = f"subtitles='{ass_str}':fontsdir='{fonts_dir_str}'"
+    sub_filter = f"subtitles='{ass_str}':fontsdir='{fonts_dir_str}'"
 
-    run_ffmpeg([
-        "-i", str(video_path),
-        "-vf", vf,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-        "-c:a", "copy",
-        str(output_path)
-    ], "burn ASS captions")
+    if speed != 1.0:
+        vf = f"{sub_filter},setpts=PTS/{speed}"
+        af = f"atempo={speed}"
+        run_ffmpeg([
+            "-i", str(video_path),
+            "-filter_complex", f"[0:v]{vf}[v];[0:a]{af}[a]",
+            "-map", "[v]", "-map", "[a]",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+            "-c:a", "aac", "-b:a", "192k",
+            str(output_path)
+        ], f"burn captions + speed {speed}x (A1 merged)")
+    else:
+        run_ffmpeg([
+            "-i", str(video_path),
+            "-vf", sub_filter,
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+            "-c:a", "copy",
+            str(output_path)
+        ], "burn ASS captions")
 
 
 # ========== MAIN ==========
@@ -633,9 +655,9 @@ def main():
         if i < n_clips - 1:
             clip["trim_to"] += XFADE_DURATION
 
-    # Step 1: Trim clips (anchor clips get start offset to fix lip-sync lag)
-    print(f"\n--- Step 1: Trimming clips (anchor lip-sync offset={LIP_SYNC_OFFSET}s) ---")
-    trimmed = []
+    # Step 1+2: Trim + normalize in a single pass per clip (A2 optimisation)
+    print(f"\n--- Step 1+2: Trim + normalize (lip-sync offset={LIP_SYNC_OFFSET}s) ---")
+    normalized = []
     for clip in clip_order:
         name = clip["name"]
         src = clips_dir / f"{name}.mp4"
@@ -645,21 +667,12 @@ def main():
 
         trim_to = clip["trim_to"]
         offset = LIP_SYNC_OFFSET if clip["type"] == "anchor" else 0.0
-        dst = tmp_dir / f"{name}_trimmed.mp4"
-        trim_clip(src, dst, trim_to, start_offset=offset)
+        dst = tmp_dir / f"{name}_norm.mp4"
+        trim_and_normalize(src, dst, trim_to, start_offset=offset)
 
-        trimmed.append({"path": dst, "duration": trim_to, "name": name})
-        print(f"  {name}: {trim_to:.2f}s{f' (offset {offset}s)' if offset > 0 else ''}")
-
-    # Step 2: Normalize resolution
-    print("\n--- Step 2: Normalizing resolution ---")
-    normalized = []
-    for clip in trimmed:
-        dst = tmp_dir / f"{clip['name']}_norm.mp4"
-        normalize_clip(clip["path"], dst)
-        # Use actual duration from ffprobe, not requested trim — clips may be shorter
         actual_dur = get_duration(dst)
-        normalized.append({"path": dst, "duration": actual_dur, "name": clip["name"]})
+        normalized.append({"path": dst, "duration": actual_dur, "name": name})
+        print(f"  {name}: {trim_to:.2f}s{f' (offset {offset}s)' if offset > 0 else ''}")
 
     # Step 3: Concatenate with xfade cross transitions
     print("\n--- Step 3: xfade cross transitions ---")
@@ -708,12 +721,19 @@ def main():
         print("\n--- Step 5: No background music found, skipping ---")
         with_music_path = with_audio_path
 
-    # Step 6: Burn captions
+    # Step 6+7: Build captions and burn into video (with speed-adjust folded in via A1)
+    suffix = f"_{args.audio_mode.replace('-', '')}" if args.audio_mode != "original" else ""
+    reel_name = f"final_reel{suffix}.mp4"
+    final_path = base_dir / reel_name
+
     if args.no_captions:
-        final_path = with_music_path
+        if args.final_speed != 1.0:
+            print(f"\n--- Step 6: Speed-adjust only ({args.final_speed}x) ---")
+            speed_up_video(with_music_path, final_path, args.final_speed)
+        else:
+            final_path = with_music_path
     else:
         print("\n--- Step 6: Building ASS captions (Kalam, yellow emphasis) ---")
-        # Load word timestamps
         words = []
         if words_path.exists():
             with open(words_path, encoding="utf-8") as f:
@@ -722,29 +742,10 @@ def main():
         ass_path = tmp_dir / "captions.ass"
         build_ass_subtitles(script, words, FONT_BOLD, ass_path)
 
-        print("\n--- Step 7: Burning captions into video ---")
-        # Name output based on audio mode
-        suffix = f"_{args.audio_mode.replace('-', '')}" if args.audio_mode != "original" else ""
-        reel_name = f"final_reel{suffix}.mp4"
-        final_path = base_dir / reel_name
-        burn_subtitles(with_music_path, ass_path, font_dir, final_path)
-
-    # Fallback: copy to final location
-    suffix = f"_{args.audio_mode.replace('-', '')}" if args.audio_mode != "original" else ""
-    reel_name = f"final_reel{suffix}.mp4"
-    if final_path != base_dir / reel_name:
-        dest = base_dir / reel_name
-        shutil.copy2(final_path, dest)
-        final_path = dest
-
-    # Step 8: Final pacing speedup (default 1.2x) — pitch-preserving setpts+atempo
-    if args.final_speed != 1.0:
-        print(f"\n--- Step 8: Final speedup ({args.final_speed}x setpts+atempo) ---")
-        # Move 1.0x baseline aside, then write the sped-up version to the canonical name
-        baseline_path = base_dir / f"final_reel{suffix}_1.0x.mp4"
-        shutil.move(str(final_path), str(baseline_path))
-        speed_up_video(baseline_path, final_path, args.final_speed)
-        print(f"  1.0x baseline preserved at: {baseline_path}")
+        speed_label = f" + speed {args.final_speed}x" if args.final_speed != 1.0 else ""
+        print(f"\n--- Step 7: Burning captions{speed_label} (A1 merged) ---")
+        burn_subtitles(with_music_path, ass_path, font_dir, final_path,
+                       speed=args.final_speed)
 
     dur = get_duration(final_path)
     print(f"\n=== DONE ===")
