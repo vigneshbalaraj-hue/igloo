@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { processPayment } from "@/lib/process-payment";
+import type { PricingTier } from "@/lib/pricing";
 
 export const runtime = "nodejs";
 
@@ -41,6 +42,7 @@ export async function POST(req: NextRequest) {
 
   let body: {
     topic?: string;
+    tier?: string;
     razorpay_order_id?: string;
     razorpay_payment_id?: string;
     razorpay_signature?: string;
@@ -53,10 +55,12 @@ export async function POST(req: NextRequest) {
 
   const {
     topic,
+    tier: rawTier,
     razorpay_order_id,
     razorpay_payment_id,
     razorpay_signature,
   } = body;
+  const tier = (rawTier === "double" ? "double" : "single") as PricingTier;
 
   if (!topic || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
     return NextResponse.json({ error: "missing_fields" }, { status: 400 });
@@ -73,6 +77,7 @@ export async function POST(req: NextRequest) {
     razorpay_order_id,
     razorpay_payment_id,
     razorpay_signature,
+    tier,
     source: "client",
   });
 

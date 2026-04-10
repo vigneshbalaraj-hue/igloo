@@ -4,6 +4,7 @@ import { useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { Show } from "@clerk/nextjs";
 import ScrollReveal from "./ScrollReveal";
+import { PRICING_TIERS } from "@/lib/pricing";
 
 const reels = [
   "/reels/fasting-wellness.mp4",
@@ -123,16 +124,16 @@ export default function Pricing() {
         <ScrollReveal className="mt-16 max-w-lg mx-auto">
           <div className="group rounded-[2rem] border border-border-subtle bg-surface p-10 md:p-12 transition-all duration-700 ease-[cubic-bezier(0.32,0.72,0,1)] hover:border-border-hover hover:bg-surface-elevated">
               <div className="flex items-center gap-3 mb-1">
-                <span className="eyebrow">Save 25%</span>
+                <span className="eyebrow">{PRICING_TIERS.double.badge}</span>
               </div>
               <div className="flex items-baseline gap-3">
                 <span className="text-5xl md:text-6xl font-light tracking-tight text-foreground">
-                  $14.99
+                  ${PRICING_TIERS.double.display_usd}
                 </span>
-                <span className="text-text-muted text-sm">for 2 videos</span>
+                <span className="text-text-muted text-sm">for {PRICING_TIERS.double.label}</span>
               </div>
               <p className="mt-2 text-text-muted text-sm">
-                or $9.99 for one
+                or ${PRICING_TIERS.single.display_usd} for {PRICING_TIERS.single.label}
               </p>
 
               <p className="mt-4 text-text-secondary text-sm leading-relaxed">

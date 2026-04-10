@@ -1,3 +1,4 @@
+import "@/styles/landing.css";
 import Navbar from "@/components/Navbar";
 import Hero from "@/components/Hero";
 import Problem from "@/components/Problem";
@@ -9,7 +10,7 @@ import Footer from "@/components/Footer";
 
 export default function Home() {
   return (
-    <>
+    <div className="landing-theme">
       {/* Background layers */}
       <div className="mesh-gradient" />
       <div className="noise-overlay" />
@@ -29,6 +30,6 @@ export default function Home() {
       </main>
 
       <Footer />
-    </>
+    </div>
   );
 }

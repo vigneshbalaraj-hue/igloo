@@ -1,3 +1,4 @@
+import "@/styles/landing.css";
 import Navbar from "@/components/Navbar";
 
 export default function MarketingLayout({
@@ -6,7 +7,7 @@ export default function MarketingLayout({
   children: React.ReactNode;
 }) {
   return (
-    <>
+    <div className="landing-theme">
       <div className="mesh-gradient" />
       <div className="noise-overlay" />
       <Navbar />
@@ -33,6 +34,6 @@ export default function MarketingLayout({
           </div>
         </div>
       </footer>
-    </>
+    </div>
   );
 }

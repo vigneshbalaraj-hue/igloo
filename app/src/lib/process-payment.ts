@@ -7,7 +7,8 @@
 
 import "server-only";
 import { getServerSupabase, getOrCreateUser } from "@/lib/supabase-server";
-import { REEL_PRICE_PAISE } from "@/lib/razorpay";
+import { PRICING_TIERS } from "@/lib/pricing";
+import type { PricingTier } from "@/lib/pricing";
 import { mintStudioToken } from "@/lib/studio-token";
 
 const IGLOO_STUDIO_URL = process.env.IGLOO_STUDIO_URL!;
@@ -30,6 +31,7 @@ export type ProcessPaymentInput = {
   razorpay_payment_id: string;
   razorpay_signature: string | null; // null when called from webhook
   amount_paise?: number;
+  tier?: PricingTier;
   source: "client" | "webhook";
 };
 
@@ -39,6 +41,8 @@ export type ProcessPaymentResult =
 
 export async function processPayment(input: ProcessPaymentInput): Promise<ProcessPaymentResult> {
   const supabase = getServerSupabase();
+  const tier = input.tier ?? "single";
+  const tierConfig = PRICING_TIERS[tier];
 
   // 1. Ensure user
   let dbUser;
@@ -58,10 +62,11 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
         razorpay_payment_id: input.razorpay_payment_id,
         razorpay_order_id: input.razorpay_order_id,
         razorpay_signature: input.razorpay_signature,
-        amount_paise: input.amount_paise ?? REEL_PRICE_PAISE,
+        amount_paise: input.amount_paise ?? tierConfig.price_paise,
         currency: "INR",
         status: "captured",
-        credits_granted: 1,
+        credits_granted: tierConfig.credits,
+        tier,
         webhook_event: input.source === "webhook" ? "payment.captured" : "client.handler",
       },
       { onConflict: "razorpay_payment_id" }
@@ -95,28 +100,19 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
     };
   }
 
-  // 4. Insert credit GRANT for this payment. Idempotent: a unique
-  //    constraint on (payment_id, reason='payment') would be ideal,
-  //    but we don't have one — instead we check first. The race
-  //    window is tight enough (single-payment id) that double-grant
-  //    is unlikely; the unique index on runs.payment_id below is
-  //    the real safety net.
-  const { data: existingGrant } = await supabase
-    .from("credits")
-    .select("id")
-    .eq("payment_id", payment.id)
-    .eq("reason", "payment")
-    .maybeSingle();
-
-  if (!existingGrant) {
-    const { error: grantErr } = await supabase.from("credits").insert({
-      user_id: dbUser.id,
-      delta: 1,
-      reason: "payment",
-      payment_id: payment.id,
-      note: `${input.source} grant`,
-    });
-    if (grantErr) {
+  // 4. Insert credit GRANT for this payment.
+  //    The unique index credits_payment_id_payment_unique (migration 0005)
+  //    prevents double grants from webhook retries.
+  const { error: grantErr } = await supabase.from("credits").insert({
+    user_id: dbUser.id,
+    delta: tierConfig.credits,
+    reason: "payment",
+    payment_id: payment.id,
+    note: `${input.source} grant (${tier})`,
+  });
+  if (grantErr) {
+    // 23505 = unique_violation — grant already exists (idempotent, continue)
+    if ((grantErr as { code?: string } | null)?.code !== "23505") {
       console.error("[processPayment] credit grant insert failed", grantErr);
       return { ok: false, error: "credit_grant_failed", status: 500 };
     }
@@ -159,7 +155,7 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
     return { ok: false, error: "run_insert_failed", status: 500 };
   }
 
-  // 6. Insert credit CONSUMPTION row tied to this run.
+  // 6. Insert credit CONSUMPTION row tied to this run (1 credit per run).
   const { error: consumeErr } = await supabase.from("credits").insert({
     user_id: dbUser.id,
     delta: -1,

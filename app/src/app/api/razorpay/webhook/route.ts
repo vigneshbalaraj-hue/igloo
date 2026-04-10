@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
 import { processPayment } from "@/lib/process-payment";
+import type { PricingTier } from "@/lib/pricing";
 
 export const runtime = "nodejs";
 
@@ -87,6 +88,7 @@ export async function POST(req: NextRequest) {
 
   const clerkUserId = payment.notes?.clerk_user_id;
   const topic = payment.notes?.topic;
+  const tier = (payment.notes?.tier ?? "single") as PricingTier;
   const email = payment.email;
 
   if (!clerkUserId || !topic) {
@@ -112,6 +114,7 @@ export async function POST(req: NextRequest) {
     razorpay_payment_id: payment.id,
     razorpay_signature: null,
     amount_paise: payment.amount,
+    tier,
     source: "webhook",
   });
 

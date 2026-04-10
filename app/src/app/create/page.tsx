@@ -1,14 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useUser } from "@clerk/nextjs";
-
-// Display-only pricing (sticker). The actual charge is ₹1,249 INR via
-// Razorpay — disclosed below the sticker. Keep these values in sync with
-// app/src/lib/razorpay.ts.
-const DISPLAY_USD = "14.99";
-const DISPLAY_STRIKETHROUGH_USD = "19.99";
-const DISPLAY_INR_DISCLOSURE = "Charged as ₹1,249 INR";
+import { PRICING_TIERS } from "@/lib/pricing";
+import type { PricingTier } from "@/lib/pricing";
 
 type RazorpayHandlerResponse = {
   razorpay_order_id: string;
@@ -55,8 +50,19 @@ function loadRazorpayScript(): Promise<boolean> {
 export default function CreatePage() {
   const { user, isLoaded } = useUser();
   const [topic, setTopic] = useState("");
+  const [tier, setTier] = useState<PricingTier>("double");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [creditBalance, setCreditBalance] = useState<number | null>(null);
+
+  // Fetch credit balance on mount
+  useEffect(() => {
+    if (!isLoaded || !user) return;
+    fetch("/api/credits/balance")
+      .then((r) => r.json())
+      .then((d) => setCreditBalance(d.balance ?? 0))
+      .catch(() => setCreditBalance(0));
+  }, [isLoaded, user]);
 
   async function handleBuy() {
     setError(null);
@@ -74,11 +80,13 @@ export default function CreatePage() {
       const ok = await loadRazorpayScript();
       if (!ok) throw new Error("Failed to load Razorpay checkout.");
 
+      const tierConfig = PRICING_TIERS[tier];
+
       // 1. Create a Razorpay order on the server
       const orderRes = await fetch("/api/razorpay/order", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ topic }),
+        body: JSON.stringify({ topic, tier }),
       });
       if (!orderRes.ok) {
         const t = await orderRes.text();
@@ -93,7 +101,7 @@ export default function CreatePage() {
           amount,
           currency,
           name: "Igloo",
-          description: "1 reel",
+          description: tierConfig.label,
           order_id: orderId,
           prefill: {
             email: user.primaryEmailAddress?.emailAddress ?? "",
@@ -101,13 +109,13 @@ export default function CreatePage() {
           },
           theme: { color: "#0a0a0a" },
           handler: async (response: RazorpayHandlerResponse) => {
-            // 3. Payment successful — trigger the run
             try {
               const triggerRes = await fetch("/api/trigger-run", {
                 method: "POST",
                 headers: { "content-type": "application/json" },
                 body: JSON.stringify({
                   topic,
+                  tier,
                   razorpay_order_id: response.razorpay_order_id,
                   razorpay_payment_id: response.razorpay_payment_id,
                   razorpay_signature: response.razorpay_signature,
@@ -119,8 +127,6 @@ export default function CreatePage() {
               }
               const { studio_url } = await triggerRes.json();
               if (!studio_url) throw new Error("Missing studio URL in response.");
-              // Full navigation so the Flask session cookie lands on
-              // the Modal subdomain.
               window.location.href = studio_url;
               resolve();
             } catch (e) {
@@ -139,6 +145,42 @@ export default function CreatePage() {
       setBusy(false);
     }
   }
+
+  async function handleRedeemCredit() {
+    setError(null);
+    if (!topic.trim()) {
+      setError("Give it a topic first.");
+      return;
+    }
+    setBusy(true);
+
+    try {
+      const res = await fetch("/api/redeem-credit", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ topic }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data.error === "insufficient_credits") {
+          setCreditBalance(0);
+          throw new Error("No credits left. Please purchase a new reel.");
+        }
+        throw new Error(`Redeem failed: ${data.error ?? res.statusText}`);
+      }
+      const { studio_url } = await res.json();
+      if (!studio_url) throw new Error("Missing studio URL in response.");
+      window.location.href = studio_url;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const singleTier = PRICING_TIERS.single;
+  const doubleTier = PRICING_TIERS.double;
+  const hasCredits = creditBalance !== null && creditBalance > 0;
 
   return (
     <main className="flex-1 flex flex-col items-center justify-center px-6 py-16">
@@ -159,12 +201,82 @@ export default function CreatePage() {
           className="w-full rounded-xl bg-neutral-900 border border-neutral-800 px-4 py-3 text-base resize-y focus:outline-none focus:ring-2 focus:ring-white/30"
         />
 
-        <div className="mt-8 rounded-2xl border border-neutral-800 bg-neutral-950 px-6 py-5">
-          <div className="flex items-baseline gap-3">
-            <span className="text-4xl font-semibold tracking-tight">${DISPLAY_USD}</span>
-            <span className="text-lg text-neutral-500 line-through">${DISPLAY_STRIKETHROUGH_USD}</span>
+        {/* Credit balance banner */}
+        {hasCredits && (
+          <div className="mt-6 rounded-xl border border-emerald-800 bg-emerald-950/50 px-5 py-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-emerald-300">
+                  You have {creditBalance} credit{creditBalance !== 1 ? "s" : ""}
+                </p>
+                <p className="text-xs text-emerald-400/70 mt-0.5">
+                  Use a credit to skip payment
+                </p>
+              </div>
+              <button
+                onClick={handleRedeemCredit}
+                disabled={busy}
+                className="rounded-full bg-emerald-600 text-white px-5 py-2.5 text-sm font-medium hover:bg-emerald-500 transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {busy ? "Working…" : "Use 1 credit"}
+              </button>
+            </div>
           </div>
-          <p className="mt-1 text-sm text-neutral-400">{DISPLAY_INR_DISCLOSURE}</p>
+        )}
+
+        {/* Divider when credits available */}
+        {hasCredits && (
+          <div className="flex items-center gap-4 mt-6">
+            <div className="flex-1 h-px bg-neutral-800" />
+            <span className="text-xs text-neutral-500 uppercase tracking-wider">or buy more</span>
+            <div className="flex-1 h-px bg-neutral-800" />
+          </div>
+        )}
+
+        {/* Tier selector */}
+        <div className="mt-6 grid grid-cols-2 gap-3">
+          {/* Single tier */}
+          <button
+            type="button"
+            onClick={() => setTier("single")}
+            className={`rounded-2xl border px-5 py-5 text-left transition ${
+              tier === "single"
+                ? "border-white bg-neutral-900"
+                : "border-neutral-800 bg-neutral-950 hover:border-neutral-700"
+            }`}
+          >
+            <span className="text-2xl font-semibold tracking-tight">
+              ${singleTier.display_usd}
+            </span>
+            <p className="mt-1 text-sm text-neutral-400">{singleTier.label}</p>
+            <p className="mt-0.5 text-xs text-neutral-500">
+              {singleTier.display_inr}
+            </p>
+          </button>
+
+          {/* Double tier */}
+          <button
+            type="button"
+            onClick={() => setTier("double")}
+            className={`relative rounded-2xl border px-5 py-5 text-left transition ${
+              tier === "double"
+                ? "border-white bg-neutral-900"
+                : "border-neutral-800 bg-neutral-950 hover:border-neutral-700"
+            }`}
+          >
+            {doubleTier.badge && (
+              <span className="absolute -top-2.5 right-3 rounded-full bg-white text-black text-[10px] font-semibold px-2.5 py-0.5 uppercase tracking-wider">
+                {doubleTier.badge}
+              </span>
+            )}
+            <span className="text-2xl font-semibold tracking-tight">
+              ${doubleTier.display_usd}
+            </span>
+            <p className="mt-1 text-sm text-neutral-400">{doubleTier.label}</p>
+            <p className="mt-0.5 text-xs text-neutral-500">
+              {doubleTier.display_inr}
+            </p>
+          </button>
         </div>
 
         {error && (
@@ -178,9 +290,10 @@ export default function CreatePage() {
           disabled={busy}
           className="mt-6 w-full rounded-full bg-white text-black px-6 py-4 font-medium hover:bg-neutral-200 transition disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {busy ? "Working…" : `Buy 1 reel — $${DISPLAY_USD}`}
+          {busy
+            ? "Working…"
+            : `Buy ${PRICING_TIERS[tier].label} — $${PRICING_TIERS[tier].display_usd}`}
         </button>
-
       </div>
     </main>
   );
