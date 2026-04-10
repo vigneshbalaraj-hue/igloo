@@ -434,8 +434,9 @@ def ts_to_ass(seconds: float) -> str:
 def build_ass_subtitles(script: dict, words: list, font_path: str, output_path: Path):
     """Generate ASS subtitle file with Kalam font, 60% height, yellow emphasis.
 
-    Emphasized words (ALL CAPS in caption_text) are rendered in yellow.
-    All other words are white. Font: Kalam Bold.
+    Shows full narration_text as captions. Emphasis keywords (ALL CAPS words
+    from caption_text) are rendered in yellow; all other words are white.
+    Font: Kalam Bold.
     """
     # Identify emphasized words from caption_text across all scenes
     emphasis_words = set()
@@ -499,7 +500,7 @@ def build_ass_subtitles(script: dict, words: list, font_path: str, output_path: 
     for scene in script["scenes"]:
         if scene["scene_id"] in skip_caption_scenes:
             continue
-        caption = scene.get("caption_text", "")
+        caption = scene.get("narration_text", "")
         if not caption:
             continue
 
@@ -510,8 +511,8 @@ def build_ass_subtitles(script: dict, words: list, font_path: str, output_path: 
         parts = []
         for word in caption.split():
             clean = word.strip(".,!?;:-")
-            # Check if this word (or its clean form) should be emphasized
-            if clean.isupper() and len(clean) > 1:
+            # Check if this word matches an emphasis keyword from caption_text
+            if clean.upper() in emphasis_words:
                 parts.append(f"{{{YELLOW}}}{word}{{{WHITE}}}")
             else:
                 parts.append(word)
