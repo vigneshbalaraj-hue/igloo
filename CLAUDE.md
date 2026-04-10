@@ -26,6 +26,11 @@ You operate within a 3-layer architecture that separates concerns to maximize re
 
 ## Operating Principles
 
+**0. Approval before non-trivial decisions (NON-NEGOTIABLE)**
+Never make a decision with non-trivial ramifications until you (a) fully understand the ramifications and (b) get explicit user approval. "Non-trivial" means: anything that changes the architecture, costs API credits, takes >10 min of compute, picks one approach over another with different tradeoffs, or commits the user to a path that's expensive to reverse. When you spot a fork in the road, stop and surface the tradeoffs — do not pick the path yourself just because it looks structurally cleaner.
+
+**Canonical example (s31/s32):** Faced with a Fly OOM, Claude refactored `assemble_video.py:build_xfade_concat` to a pairwise left-fold instead of bumping to `shared-cpu-2x` + 4gb (~$6/mo). The refactor was structurally correct but introduced a 2-3× wall-time penalty that compounded with Fly's noisy-neighbor steal into a ~2-hour assembly time (vs ~5-10 min for single-pass on a bigger box). The user pushed back, the pairwise approach was reverted in s32, and ~1.5h of user time was wasted on the limping run. Rule of thumb derived from this: **on bounded-N workloads (N capped by product constraints, not user input), default to vertical scaling over algorithmic refactor, and always surface the tradeoff before picking either.**
+
 **1. Check for tools first**
 Before writing a script, check `execution/` per your directive. Only create new scripts if none exist.
 
@@ -85,14 +90,23 @@ You sit between human intent (directives) and deterministic execution (Python sc
 
 Be pragmatic. Be reliable. Self-anneal.
 
+## Overall product goal
+
+**ALWAYS READ [GOAL.md](GOAL.md) AT THE START OF EVERY SESSION.** It is the north-star document for what Igloo is, the canonical customer journey, product boundaries (landing vs gate vs studio), non-negotiables, and anti-drift guardrails. Previous sessions drifted into rebuilding the Flask wizard in Next.js and into DNS theater; GOAL.md exists to prevent that. If a task you're about to do doesn't serve one of the 7 customer-journey steps listed there, stop and ask.
+
 ## Current state (Igloo launch)
 
-**Latest checkpoint:** `.tmp/checkpoint_2026-04-08_session24.md` — start here.
+**Latest checkpoint:** `.tmp/checkpoint_2026-04-10_session33.md` — start here. (Predecessors: s32, s31, s30.)
 
-- Phases 1–8 ✅ complete. Sign up → buy → pipeline → admin review → customer download all working end-to-end locally.
-- **Next.js app** lives in `app/` (Next 16 + React 19 + Tailwind 4 + Clerk 7). Middleware file is `src/proxy.ts` (Next 16 rename), not `middleware.ts`. Razorpay is in TEST mode.
-- **Phase 9 next:** Vercel deploy + flip Razorpay to live + ₹420 end-to-end charge.
-- Modal trigger URL: `https://vigneshbalaraj-hue--igloo-trigger.modal.run`
-- Modal deploys must use `PYTHONIOENCODING=utf-8` prefix on Windows
-- Local webhook testing uses cloudflared tunnel — URL is ephemeral, dies on terminal close. Razorpay dashboard webhook will need re-pointing each restart until Vercel deploy.
-- Use local tsc (`./node_modules/.bin/tsc`) not `npx tsc` (npx grabs unrelated tsc@2 package).
+- **Session 33 — All three apps live on production domains. Razorpay live mode blocked.** Bumped Fly to `performance-2x` (2 dedicated vCPUs, 4gb, ~$60/mo). Applied A1 (merge caption burn + speed-adjust) and A2 (merge trim + normalize) encode optimizations — step 8 goes from 5 encode passes to 3. All three apps on real domains: `www.igloo.video` (landing), `app.igloo.video` (gate), `igloo-studio.fly.dev` (studio). Switched Razorpay to live keys (`rzp_live_`). **Blocker:** Razorpay live order creation fails — error serialization fixed, root cause unknown, debug next session. One test run completed on shared-cpu-2x (78 min, pre-A1/A2) — performance-2x + A1/A2 still untested.
+- **Production domains:**
+  - Landing: `www.igloo.video` → Vercel project `igloo` (root dir: `landing/`)
+  - Gate: `app.igloo.video` → Vercel project `igloo-gate` (root dir: `app/`)
+  - Studio: `igloo-studio.fly.dev` → Fly `performance-2x`
+  - Fly `IGLOO_APP_URL` = `https://www.igloo.video`
+- **Vercel deployment: use Git push, NOT `vercel --prod` CLI.** CLI confuses igloo/igloo-gate project links and uploads hundreds of MB. Git auto-deploys landing on push. Gate (`igloo-gate`) needs Git integration connected (Vercel Dashboard → Settings → Git, root dir `app/`).
+- **Razorpay is LIVE MODE.** Keys: `rzp_live_Sbg199N6mjjpuR`. International Cards enabled. Webhook: `https://app.igloo.video/api/razorpay/webhook`. Real money — no test disclaimer.
+- **flyctl in bash:** `~/.fly/bin/flyctl.exe`. Deploy: `~/.fly/bin/flyctl.exe deploy` from repo root. **Never** `fly scale count 2`.
+- **Assembly pipeline post-A1/A2:** 3 encode passes (trim+normalize per clip → xfade chain → caption+speed burn). Old `speed_up_video` function retained for `--no-captions` path only.
+- **Deferred:** email on deliver (Phase 10), Razorpay refund API, `run_pipeline.py:251` CLI `--speed` fix, clean up stale env vars on `igloo` landing Vercel project.
+- **Stack:** Next 16 + React 19 + Tailwind 4 + Clerk 7. Use `./node_modules/.bin/tsc` not `npx tsc`.

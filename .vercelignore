@@ -1,0 +1,10 @@
+.tmp
+*.tar.gz
+execution
+app/node_modules
+infra
+tools/ffmpeg.exe
+tools/ffprobe.exe
+data
+.git
+run_archive*

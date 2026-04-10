@@ -1,25 +1,31 @@
 """
-Igloo Modal worker — wraps the 9-step pipeline as a serverless function.
+Igloo Modal studio — hosts the Flask wizard + pipeline on Modal.
 
 Architecture:
-  Next.js /app  ──HTTP──>  run_reel.web_url  ──spawns──>  run_reel(run_id)
-                                                              │
-                                                              ├─ reads runs row from Supabase
-                                                              ├─ creates /tmp/igloo/<run_id>/ workdir
-                                                              ├─ subprocess: run_pipeline.py --new --workdir ... --auto-go
-                                                              ├─ uploads final.mp4 to Supabase Storage
-                                                              └─ updates row → status=awaiting_review (or failed)
+  Next.js (app.igloo.video) gates access with Clerk auth and Razorpay payment,
+  creates a runs row with status='draft', mints a signed HMAC token
+  {run_id, user_id, exp} and redirects the browser to:
 
-Concurrency safety:
-  - Each invocation gets its own /tmp/igloo/<run_id>/ directory (UUID-isolated)
-  - run_pipeline.py honors --workdir flag (added in Phase 5 pre-flight)
-  - No shared mutable state between invocations
+      https://<workspace>--igloo-studio.modal.run/?token=<signed>
+
+  Modal runs one warm container hosting the Flask app (execution/web_app.py)
+  via @modal.wsgi_app(). Flask verifies the token, stores {user_id, run_id}
+  in flask.session, and walks the user through the theme → narration →
+  character → script wizard. On "Create My Reel" it subprocesses the 9-step
+  pipeline in a per-user workdir and, on success, uploads the final mp4 to
+  Supabase Storage and flips the run to status='awaiting_review'. The browser
+  is redirected back to app.igloo.video/runs/<id> where the operator picks it
+  up for QC review.
+
+  Pipeline execution is capped at IGLOO_MAX_PIPELINES (default 3) concurrent
+  runs via atomic Postgres UPDATEs on runs.status. The wizard itself is
+  always free. Multi-tenancy inside the single container is handled by
+  web_app.py keying all state (locks, queues, workdirs) by user_id.
 
 Deploy:
-  modal deploy infra/modal/igloo_worker.py
+  PYTHONIOENCODING=utf-8 modal deploy infra/modal/igloo_worker.py
 
-Test (after seeding a runs row in Supabase):
-  modal run infra/modal/igloo_worker.py::test --run-id <uuid>
+  Resulting URL: https://<workspace>--igloo-studio.modal.run
 """
 
 import modal
@@ -31,23 +37,29 @@ app = modal.App("igloo")
 # ---------------------------------------------------------------------------
 # Pipeline deps:
 #   - ffmpeg (system) for assembly
+#   - flask for the wizard WSGI app
 #   - PyJWT for Kling API auth
 #   - supabase python client for DB + storage
-#   - All other API calls in execution/ use stdlib urllib (no requests/httpx)
+#   - All other API calls in execution/ use stdlib urllib
+#
+# Local dirs shipped into the container:
+#   - execution/       → /app/execution   (Flask app + pipeline step scripts)
+#   - tools/fonts/     → /app/tools/fonts (captions font; assemble_video has
+#                                          no fallback if this is missing)
+#   - data/            → /app/data        (voice_calibration.json for prompt_bank)
 # ---------------------------------------------------------------------------
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg")
     .pip_install(
+        "flask==3.0.0",
         "pyjwt==2.8.0",
         "supabase==2.5.0",
-        "fastapi[standard]",   # required by @modal.fastapi_endpoint (used by `trigger`)
     )
-    .add_local_dir(
-        "execution",
-        remote_path="/app/execution",
-    )
+    .add_local_dir("execution", remote_path="/app/execution")
+    .add_local_dir("tools/fonts", remote_path="/app/tools/fonts")
+    .add_local_dir("data", remote_path="/app/data")
 )
 
 # ---------------------------------------------------------------------------
@@ -64,239 +76,42 @@ image = (
 #        KLING_ACCESS_KEY=...
 #        KLING_SECRET_KEY=...
 #        ELEVENLABS_API_KEY=...
-#        ELEVENLABS_VOICE_ID=...              (default voice; per-run override below)
+#        ELEVENLABS_VOICE_ID=...              (default voice; per-run override)
 #
-# The pipeline scripts read these via load_env_value() which falls back to
-# os.environ when .env is missing. Modal injects secrets as env vars, so this
-# Just Works™ without writing a .env file inside the container.
+#   3. igloo-studio
+#        IGLOO_STUDIO_SECRET=<32 bytes base64, byte-identical to Next.js side>
+#        IGLOO_APP_URL=https://app.igloo.video
+#        IGLOO_MAX_PIPELINES=3
+#
+# Modal injects secrets as env vars; web_app.load_env() reads os.environ first
+# so no .env file is needed inside the container.
 # ---------------------------------------------------------------------------
 
 secrets = [
     modal.Secret.from_name("igloo-supabase"),
     modal.Secret.from_name("igloo-apis"),
+    modal.Secret.from_name("igloo-studio"),
 ]
 
 
 # ---------------------------------------------------------------------------
-# Helpers (defined inside Modal-imported scope so they ship with the function)
-# ---------------------------------------------------------------------------
-
-def _supabase_client():
-    import os
-    from supabase import create_client
-    return create_client(
-        os.environ["SUPABASE_URL"],
-        os.environ["SUPABASE_SERVICE_ROLE_KEY"],
-    )
-
-
-def _find_final_mp4(workdir):
-    """Pipeline writes final_reel_optionc.mp4 by default. Fall back to any final_reel*.mp4."""
-    from pathlib import Path
-    primary = Path(workdir) / "final_reel_optionc.mp4"
-    if primary.exists():
-        return primary
-    candidates = sorted(Path(workdir).glob("final_reel*.mp4"))
-    return candidates[0] if candidates else None
-
-
-# ---------------------------------------------------------------------------
-# Main worker function
+# Studio — Flask wizard + pipeline host
 # ---------------------------------------------------------------------------
 
 @app.function(
     image=image,
     secrets=secrets,
-    timeout=3600,           # 1 hour hard cap per run
-    cpu=2.0,
-    memory=4096,
-    retries=0,              # We handle failure ourselves via Supabase status
+    timeout=3600,           # 1 hour — longest pipeline should finish well under this
+    cpu=1.0,                # orchestrator only; heavy work is on Kling/ElevenLabs/Gemini
+    memory=2048,            # 2 GB — Modal scheduling stalls on anything bigger right now
+    min_containers=1,       # keep one warm so the wizard doesn't cold-start
+    max_containers=1,       # single-container multi-tenant for MVP
 )
-def run_reel(run_id: str) -> dict:
-    """
-    Execute the full 9-step pipeline for a single Supabase runs row.
-
-    Args:
-        run_id: UUID of the row in public.runs
-
-    Returns:
-        {"ok": bool, "run_id": str, "storage_path": str | None, "error": str | None}
-    """
-    import os
-    import shutil
-    import subprocess
-    from datetime import datetime, timezone
-    from pathlib import Path
-
-    sb = _supabase_client()
-
-    # ----- 1. Fetch the run row -----
-    try:
-        row = sb.table("runs").select("*").eq("id", run_id).single().execute().data
-    except Exception as e:
-        return {"ok": False, "run_id": run_id, "error": f"fetch failed: {e}"}
-
-    if not row:
-        return {"ok": False, "run_id": run_id, "error": "run not found"}
-
-    if row["status"] not in ("queued", "failed"):
-        # Idempotency guard — don't re-run something that's already running/delivered
-        return {
-            "ok": False,
-            "run_id": run_id,
-            "error": f"row status is '{row['status']}', expected 'queued'",
-        }
-
-    # ----- 2. Mark running -----
-    sb.table("runs").update({
-        "status": "running",
-        "started_at": datetime.now(timezone.utc).isoformat(),
-    }).eq("id", run_id).execute()
-
-    # ----- 3. Create isolated workdir -----
-    workdir = Path(f"/tmp/igloo/{run_id}")
-    if workdir.exists():
-        shutil.rmtree(workdir)
-    workdir.mkdir(parents=True, exist_ok=True)
-
-    # ----- 4. Build env for the subprocess -----
-    # Pass through all API keys + the per-run voice override
-    env = os.environ.copy()
-    env["IGLOO_WORKDIR"] = str(workdir)
-    if row.get("voice_id"):
-        env["ELEVENLABS_VOICE_ID"] = row["voice_id"]
-
-    # ----- 5. Run the pipeline -----
-    params = row.get("params") or {}
-    theme = params.get("theme") or "General"
-    topic = row["prompt"]
-    duration = str(params.get("duration") or 40)
-
-    cmd = [
-        "python", "/app/execution/run_pipeline.py",
-        "--new",
-        "--theme", theme,
-        "--topic", topic,
-        "--workdir", str(workdir),
-        "--auto-go",
-    ]
-    if params.get("script_text"):
-        cmd.extend(["--script-text", params["script_text"]])
-    if params.get("speed"):
-        cmd.extend(["--speed", str(params["speed"])])
-
-    print(f"[run_reel] {run_id}: {' '.join(cmd)}")
-
-    try:
-        proc = subprocess.run(
-            cmd,
-            cwd="/app",
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=3500,
-        )
-    except subprocess.TimeoutExpired:
-        sb.table("runs").update({
-            "status": "failed",
-            "rejection_reason": "pipeline timeout (>3500s)",
-            "finished_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", run_id).execute()
-        return {"ok": False, "run_id": run_id, "error": "timeout"}
-
-    if proc.returncode != 0:
-        sb.table("runs").update({
-            "status": "failed",
-            "rejection_reason": f"pipeline exited {proc.returncode}",
-            "qc_notes": (proc.stderr or "")[-2000:],
-            "finished_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", run_id).execute()
-        return {
-            "ok": False,
-            "run_id": run_id,
-            "error": f"pipeline exit {proc.returncode}",
-            "stderr_tail": (proc.stderr or "")[-500:],
-        }
-
-    # ----- 6. Locate the final mp4 -----
-    final = _find_final_mp4(workdir)
-    if not final:
-        sb.table("runs").update({
-            "status": "failed",
-            "rejection_reason": "no final_reel*.mp4 produced",
-            "qc_notes": (proc.stdout or "")[-2000:],
-            "finished_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", run_id).execute()
-        return {"ok": False, "run_id": run_id, "error": "no output mp4"}
-
-    # ----- 7. Upload to Supabase Storage -----
-    storage_key = f"{run_id}/final.mp4"
-    try:
-        with open(final, "rb") as f:
-            sb.storage.from_("reels").upload(
-                path=storage_key,
-                file=f.read(),
-                file_options={
-                    "content-type": "video/mp4",
-                    "upsert": "true",
-                },
-            )
-    except Exception as e:
-        sb.table("runs").update({
-            "status": "failed",
-            "rejection_reason": f"storage upload failed: {e}",
-            "finished_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", run_id).execute()
-        return {"ok": False, "run_id": run_id, "error": f"upload failed: {e}"}
-
-    # ----- 8. Mark awaiting_review -----
-    sb.table("runs").update({
-        "status": "awaiting_review",
-        "storage_path": f"reels/{storage_key}",
-        "duration_seconds": float(duration),
-        "finished_at": datetime.now(timezone.utc).isoformat(),
-        # Clear any stale error fields from previous failed attempts (retries)
-        "qc_notes": None,
-        "rejection_reason": None,
-    }).eq("id", run_id).execute()
-
-    print(f"[run_reel] {run_id}: ✅ uploaded to reels/{storage_key}")
-
-    return {
-        "ok": True,
-        "run_id": run_id,
-        "storage_path": f"reels/{storage_key}",
-    }
-
-
-# ---------------------------------------------------------------------------
-# Web endpoint — Phase 6 (Next.js webhook handler) will POST to this URL
-# ---------------------------------------------------------------------------
-
-@app.function(image=image, secrets=secrets)
-@modal.fastapi_endpoint(method="POST")
-def trigger(item: dict):
-    """
-    POST { "run_id": "<uuid>" } → spawns run_reel and returns immediately.
-    The actual pipeline runs async; clients poll Supabase for status.
-    """
-    run_id = item.get("run_id")
-    if not run_id:
-        return {"ok": False, "error": "missing run_id"}
-    call = run_reel.spawn(run_id)
-    return {"ok": True, "run_id": run_id, "modal_call_id": call.object_id}
-
-
-# ---------------------------------------------------------------------------
-# Local entrypoint for manual testing
-# ---------------------------------------------------------------------------
-
-@app.local_entrypoint()
-def test(run_id: str):
-    """
-    Manually trigger a run for testing:
-        modal run infra/modal/igloo_worker.py::test --run-id <uuid>
-    """
-    print(f"Triggering run_reel({run_id}) on Modal...")
-    result = run_reel.remote(run_id)
-    print(f"Result: {result}")
+@modal.concurrent(max_inputs=10)
+@modal.wsgi_app()
+def studio():
+    """Expose execution/web_app.py as the Flask WSGI app for Modal."""
+    import sys
+    sys.path.insert(0, "/app/execution")
+    from web_app import app as flask_app
+    return flask_app
