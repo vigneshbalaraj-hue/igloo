@@ -45,7 +45,7 @@ function Navbar() {
         <a href="#how-it-works" className="px-4 py-2 text-sm text-text-secondary hover:text-text transition-colors rounded-full">How It Works</a>
         <a href="#examples" className="px-4 py-2 text-sm text-text-secondary hover:text-text transition-colors rounded-full">Examples</a>
       </div>
-      <a href="http://localhost:5000" className="btn-magnetic ml-2 px-5 py-2 bg-amber text-void text-sm font-semibold rounded-full hover:bg-amber-hover">
+      <a href="https://app.igloo.video/create" className="btn-magnetic ml-2 px-5 py-2 bg-amber text-void text-sm font-semibold rounded-full hover:bg-amber-hover">
         Create Your Reel
       </a>
     </nav>
@@ -175,7 +175,7 @@ function Hero() {
           Type a topic. Pick a character. Igloo writes the script, generates visuals, composes music, and delivers your reel. All in minutes.
         </p>
         <div className="hero-cta flex flex-wrap gap-4">
-          <a href="http://localhost:5000" className="btn-magnetic inline-flex items-center gap-3 px-8 py-4 bg-amber text-void font-bold rounded-2xl text-base hover:bg-amber-hover hover:shadow-[0_8px_40px_rgba(217,119,6,0.3)]">
+          <a href="https://app.igloo.video/create" className="btn-magnetic inline-flex items-center gap-3 px-8 py-4 bg-amber text-void font-bold rounded-2xl text-base hover:bg-amber-hover hover:shadow-[0_8px_40px_rgba(217,119,6,0.3)]">
             <Play size={18} strokeWidth={2.5} /> Create Your Reel
           </a>
           <a href="#examples" className="btn-magnetic inline-flex items-center gap-3 px-8 py-4 border border-border text-text-secondary font-medium rounded-2xl text-base hover:border-amber/40 hover:text-text">
@@ -714,7 +714,7 @@ function CTA() {
         <p className="text-base md:text-lg text-text-secondary font-light mb-10 max-w-[45ch] mx-auto leading-relaxed">
           Your first reel is minutes away. No account needed. No credit card. Just your idea.
         </p>
-        <a href="http://localhost:5000" className="btn-magnetic inline-flex items-center gap-3 px-10 py-5 bg-amber text-void font-bold rounded-2xl text-lg hover:bg-amber-hover hover:shadow-[0_12px_48px_rgba(217,119,6,0.35)]">
+        <a href="https://app.igloo.video/create" className="btn-magnetic inline-flex items-center gap-3 px-10 py-5 bg-amber text-void font-bold rounded-2xl text-lg hover:bg-amber-hover hover:shadow-[0_12px_48px_rgba(217,119,6,0.35)]">
           Create Your Reel <ArrowRight size={20} strokeWidth={2.5} />
         </a>
       </div>
