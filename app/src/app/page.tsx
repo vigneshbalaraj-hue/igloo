@@ -1,42 +1,34 @@
-import Link from "next/link";
-import { Show, UserButton } from "@clerk/nextjs";
+import Navbar from "@/components/Navbar";
+import Hero from "@/components/Hero";
+import Problem from "@/components/Problem";
+import HowItWorks from "@/components/HowItWorks";
+import Features from "@/components/Features";
+import Pricing from "@/components/Pricing";
+import FinalCTA from "@/components/FinalCTA";
+import Footer from "@/components/Footer";
 
 export default function Home() {
   return (
-    <main className="flex-1 flex flex-col items-center justify-center px-6 text-center">
-      <h1 className="text-5xl sm:text-7xl font-semibold tracking-tight">
-        Igloo
-      </h1>
-      <p className="mt-4 text-xl text-neutral-400 max-w-xl">
-        Video that stops thumbs. Type a topic, get a finished reel overnight.
-      </p>
+    <>
+      {/* Background layers */}
+      <div className="mesh-gradient" />
+      <div className="noise-overlay" />
 
-      <div className="mt-10 flex items-center gap-4">
-        <Show when="signed-out">
-          <Link
-            href="/sign-up"
-            className="rounded-full bg-white text-black px-6 py-3 font-medium hover:bg-neutral-200 transition"
-          >
-            Get started
-          </Link>
-          <Link
-            href="/sign-in"
-            className="rounded-full border border-neutral-700 px-6 py-3 font-medium hover:bg-neutral-900 transition"
-          >
-            Sign in
-          </Link>
-        </Show>
+      {/* Navigation */}
+      <Navbar />
 
-        <Show when="signed-in">
-          <Link
-            href="/create"
-            className="rounded-full bg-white text-black px-6 py-3 font-medium hover:bg-neutral-200 transition"
-          >
-            Create a reel
-          </Link>
-          <UserButton />
-        </Show>
-      </div>
-    </main>
+      {/* Sections */}
+      <main className="relative z-10">
+        <Hero />
+        <Problem />
+
+        <HowItWorks />
+        <Features />
+        <Pricing />
+        <FinalCTA />
+      </main>
+
+      <Footer />
+    </>
   );
 }

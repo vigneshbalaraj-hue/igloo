@@ -5,6 +5,10 @@ const isPublicRoute = createRouteMatcher([
   "/",
   "/sign-in(.*)",
   "/sign-up(.*)",
+  "/privacy",
+  "/terms",
+  "/refund",
+  "/contact",
   "/api/razorpay/webhook", // Razorpay → us, no Clerk session
   "/api/clerk-webhook",    // Clerk → us, validated by svix signature
 ]);

@@ -1,0 +1,73 @@
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "Terms of Service — Igloo",
+};
+
+export default function TermsPage() {
+  return (
+    <>
+      <h1>Terms of Service</h1>
+      <p className="meta">Last updated: 7 April 2026</p>
+
+      <p>These Terms of Service (&ldquo;Terms&rdquo;) govern your use of Igloo. By creating an account, purchasing credits, or generating a reel, you agree to these Terms.</p>
+
+      <h2>1. The Service</h2>
+      <p>Igloo is an AI-powered video generation service. You provide a topic and creative direction; Igloo writes a script, generates visuals and a voiceover, composes background music, and delivers a finished short-form video (&ldquo;reel&rdquo;).</p>
+
+      <h2>2. Eligibility</h2>
+      <p>You must be at least 18 years old to use Igloo. By using the service you confirm that you meet this requirement and that you have the legal capacity to enter into these Terms.</p>
+
+      <h2>3. Account &amp; Access</h2>
+      <p>You are responsible for keeping your account credentials secure. You must not share your account, attempt to access another user&rsquo;s account, or use Igloo through automated means without our written permission.</p>
+
+      <h2>4. Beta Service</h2>
+      <p>Igloo is currently in early beta. Access is limited and admitted in waves. Features, pricing, and availability may change without notice during this period. Reels are reviewed by our team before delivery to maintain quality.</p>
+
+      <h2>5. Acceptable Use</h2>
+      <p>You agree not to use Igloo to generate content that:</p>
+      <ul>
+        <li>Infringes on copyright, trademark, or other intellectual property rights;</li>
+        <li>Defames, harasses, threatens, or impersonates any person;</li>
+        <li>Contains sexually explicit material involving minors, or any other illegal content;</li>
+        <li>Promotes violence, hatred, or discrimination against any group;</li>
+        <li>Spreads misinformation, misleads viewers about the source of the content, or is designed to deceive;</li>
+        <li>Violates any applicable law or regulation.</li>
+      </ul>
+      <p>We reserve the right to refuse, modify, or remove any reel that violates these rules, and to suspend or terminate accounts that misuse the service. Refused reels are eligible for a full refund per our <a href="/refund">Refund Policy</a>.</p>
+
+      <h2>6. Content Ownership</h2>
+      <p>You retain ownership of the inputs you provide (topic, script, brand direction). Subject to your payment in full, you receive a worldwide, royalty-free license to use the delivered reel for any lawful purpose, commercial or personal.</p>
+      <p>You acknowledge that AI-generated outputs may, in some jurisdictions, not be eligible for copyright protection. You are responsible for verifying that your intended use complies with local law.</p>
+      <p>Igloo retains the right to use anonymized usage data and a small set of generated reels (with attribution scrubbed) to improve and showcase the service.</p>
+
+      <h2>7. Payments &amp; Credits</h2>
+      <p>Reels are sold individually. Pricing and the exact cost per reel are listed on our Pricing page. Payments are processed by Razorpay. All amounts are charged in INR; international cards are accepted and converted by your card issuer at the prevailing rate.</p>
+      <p>Credits are non-transferable and have no cash value outside the Igloo platform.</p>
+
+      <h2>8. Refunds</h2>
+      <p>Our refund policy is described in full on the <a href="/refund">Refunds page</a>. In short: if your reel is not delivered, fails our quality check, or is rejected by us for any reason, you receive a 100% refund within 24 hours.</p>
+
+      <h2>9. Service Availability</h2>
+      <p>We aim for high uptime but make no guarantee that the service will be uninterrupted or error-free. Igloo depends on third-party AI providers; outages on their end may delay delivery. We are not liable for delays caused by upstream provider issues.</p>
+
+      <h2>10. Disclaimers</h2>
+      <p>Igloo is provided &ldquo;as is&rdquo; and &ldquo;as available&rdquo; without warranties of any kind, express or implied, including merchantability, fitness for a particular purpose, and non-infringement. We do not guarantee that any reel will achieve any particular result, audience, or outcome.</p>
+
+      <h2>11. Limitation of Liability</h2>
+      <p>To the maximum extent permitted by law, Igloo&rsquo;s total liability for any claim arising out of or related to these Terms or the service is limited to the amount you paid Igloo in the 30 days preceding the claim. We are not liable for indirect, incidental, consequential, or punitive damages.</p>
+
+      <h2>12. Termination</h2>
+      <p>You may stop using Igloo at any time. We may suspend or terminate your account if you violate these Terms or use the service in a way that creates legal or operational risk.</p>
+
+      <h2>13. Governing Law</h2>
+      <p>These Terms are governed by the laws of India. Any dispute arising out of these Terms will be subject to the exclusive jurisdiction of the courts in India.</p>
+
+      <h2>14. Changes to These Terms</h2>
+      <p>We may update these Terms from time to time. Material changes will be communicated via email or a notice on this page. Continued use of Igloo after changes constitutes acceptance.</p>
+
+      <h2>15. Contact</h2>
+      <p>Questions about these Terms? Email <a href="mailto:support@igloo.video">support@igloo.video</a>.</p>
+    </>
+  );
+}
