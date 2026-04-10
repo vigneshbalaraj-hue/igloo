@@ -1,9 +1,22 @@
 """
-web_app.py — Flask web UI for the Reel Engine pipeline.
+web_app.py — Flask web UI for the Reel Engine pipeline (multi-tenant).
 
 Provides a browser-based interface for:
   - Step 0: Script generation (theme, topic, narration, character, full JSON)
-  - Steps 1-8: Pipeline execution with live logs, gates, and progress
+  - Steps 1-8: Pipeline execution with live logs and SSE progress
+
+Hosting model:
+  - On Modal (production): wrapped by @modal.wsgi_app() in infra/modal/igloo_worker.py.
+    Entry requires a signed studio token minted by Next.js (Clerk + Razorpay gates).
+  - On localhost (dev): if IGLOO_STUDIO_SECRET is unset, falls back to a synthetic
+    'dev' user/run so the existing local workflow keeps working.
+
+Multi-tenancy:
+  - All pipeline state is keyed by user_id (read from flask.session).
+  - Pipelines run in /tmp/igloo/<user_id>/<slug>/ on Linux,
+    PROJECT_ROOT/.tmp/igloo/<user_id>/<slug>/ on Windows.
+  - Concurrent pipeline execution is capped at IGLOO_MAX_PIPELINES (default 3,
+    matched to Kling's 20 concurrent generation cap).
 
 Usage:
     py execution/web_app.py
@@ -11,7 +24,11 @@ Usage:
 
 """
 
+import base64
+import hashlib
+import hmac as _hmac
 import json
+import os
 import queue
 import re
 import subprocess
@@ -20,42 +37,363 @@ import threading
 import time
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path
 
-from flask import Flask, render_template, request, jsonify, Response, send_file
+from flask import (
+    Flask, render_template, request, jsonify, Response, session,
+)
 
 # Local — shared with generate_script.py
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import prompt_bank as pb  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# ---------------------------------------------------------------------------
+# Config (env-driven, lazy where possible)
+# ---------------------------------------------------------------------------
+
+IGLOO_STUDIO_SECRET = os.environ.get("IGLOO_STUDIO_SECRET")
+IGLOO_APP_URL = os.environ.get("IGLOO_APP_URL", "http://localhost:3000")
+IGLOO_MAX_PIPELINES = int(os.environ.get("IGLOO_MAX_PIPELINES", "3"))
+
+# Dev mode: no Next.js front door, no token minted, no Supabase wired up.
+# Lets `python web_app.py` continue to work on the laptop.
+IGLOO_DEV_MODE = not IGLOO_STUDIO_SECRET
+
+# Per-OS workdir root. Modal containers are Linux → /tmp/igloo. Windows dev →
+# repo .tmp/igloo (so existing test scripts can find intermediates).
+if os.name == "nt":
+    _DEFAULT_WORKDIR_ROOT = str(PROJECT_ROOT / ".tmp" / "igloo")
+else:
+    _DEFAULT_WORKDIR_ROOT = "/tmp/igloo"
+WORKDIR_ROOT = Path(os.environ.get("IGLOO_WORKDIR_ROOT", _DEFAULT_WORKDIR_ROOT))
+
 app = Flask(__name__)
+# Flask session cookie signing key. In dev fall back to a placeholder; in prod
+# the studio secret is required and is also reused as the session key.
+app.secret_key = IGLOO_STUDIO_SECRET or "igloo-dev-only-not-secure"
+
 
 # ---------------------------------------------------------------------------
-# Shared state
+# HMAC studio-token verification (mirrors app/src/lib/studio-token.ts)
+# Format: base64url(json(payload)).base64url(hmac_sha256(payload_b64))
 # ---------------------------------------------------------------------------
 
-# Pipeline execution state (one pipeline at a time)
-pipeline_state = {
-    "running": False,
-    "current_step": None,
-    "script_path": None,
-    "logs": [],
-    "step_statuses": {},  # {step_num: "running"|"completed"|"skipped"|"failed"|"waiting_gate"}
-    "gate_pending": False,
-    "gate_step": None,
-    "process": None,
-}
-
-log_queues = {}  # session_id -> queue.Queue for SSE
+def _b64url_decode(s: str) -> bytes:
+    pad = "=" * (-len(s) % 4)
+    return base64.urlsafe_b64decode(s + pad)
 
 
-def broadcast_event(event_type: str, data: dict):
-    """Send event to all connected SSE clients."""
+def verify_studio_token(token: str) -> dict | None:
+    """Verify an HMAC-signed studio token. Returns payload dict or None."""
+    if not IGLOO_STUDIO_SECRET:
+        return None
+    if not token or "." not in token:
+        return None
+    try:
+        payload_b64, sig_b64 = token.split(".", 1)
+    except ValueError:
+        return None
+
+    expected = _hmac.new(
+        IGLOO_STUDIO_SECRET.encode("utf-8"),
+        payload_b64.encode("ascii"),
+        hashlib.sha256,
+    ).digest()
+    try:
+        given = _b64url_decode(sig_b64)
+    except Exception:
+        return None
+    if len(expected) != len(given) or not _hmac.compare_digest(expected, given):
+        return None
+
+    try:
+        payload = json.loads(_b64url_decode(payload_b64).decode("utf-8"))
+    except Exception:
+        return None
+
+    exp = payload.get("exp")
+    if not isinstance(exp, (int, float)):
+        return None
+    # exp is ms since epoch (matching JS Date.now())
+    if time.time() * 1000 > exp:
+        return None
+    if not payload.get("run_id") or not payload.get("user_id"):
+        return None
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# Per-user state (replaces the old singleton pipeline_state)
+# ---------------------------------------------------------------------------
+
+_pipeline_states: dict[str, dict] = {}
+_log_queues: dict[str, dict[str, queue.Queue]] = {}
+_state_locks: dict[str, threading.Lock] = {}
+_global_lock = threading.Lock()
+
+
+def _default_state() -> dict:
+    return {
+        "running": False,
+        "queue_status": None,        # None | 'queued' | 'running'
+        "current_step": None,
+        "script_path": None,
+        "logs": [],
+        "step_statuses": {},
+        "gate_pending": False,
+        "gate_step": None,
+        "gate_response": None,
+        "process": None,
+        "run_id": None,
+    }
+
+
+def get_state(user_id: str) -> dict:
+    with _global_lock:
+        if user_id not in _pipeline_states:
+            _pipeline_states[user_id] = _default_state()
+            _state_locks[user_id] = threading.Lock()
+            _log_queues[user_id] = {}
+        return _pipeline_states[user_id]
+
+
+def get_state_lock(user_id: str) -> threading.Lock:
+    with _global_lock:
+        return _state_locks.setdefault(user_id, threading.Lock())
+
+
+def get_user_queues(user_id: str) -> dict[str, queue.Queue]:
+    with _global_lock:
+        return _log_queues.setdefault(user_id, {})
+
+
+def broadcast_event(user_id: str, event_type: str, data: dict):
+    """Push an SSE event to all of one user's connected clients."""
     msg = json.dumps({"type": event_type, **data})
-    for q in log_queues.values():
+    for q in list(get_user_queues(user_id).values()):
         q.put(msg)
+
+
+# ---------------------------------------------------------------------------
+# Auth helpers
+# ---------------------------------------------------------------------------
+
+def current_user_id() -> str | None:
+    sess = session.get("igloo")
+    return sess.get("user_id") if sess else None
+
+
+def current_run_id() -> str | None:
+    sess = session.get("igloo")
+    return sess.get("run_id") if sess else None
+
+
+def _ensure_dev_session():
+    """In dev mode, transparently inject a synthetic session if missing."""
+    if IGLOO_DEV_MODE and not session.get("igloo"):
+        session["igloo"] = {"user_id": "dev", "run_id": "dev-run"}
+
+
+def require_auth(fn):
+    """API decorator: 401 if no session, except in dev mode where it self-heals."""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not current_user_id():
+            if IGLOO_DEV_MODE:
+                _ensure_dev_session()
+            else:
+                return jsonify({"error": "unauthorized"}), 401
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+# ---------------------------------------------------------------------------
+# Workdir helpers
+# ---------------------------------------------------------------------------
+
+def user_workdir(user_id: str, slug: str) -> Path:
+    return WORKDIR_ROOT / user_id / slug
+
+
+# ---------------------------------------------------------------------------
+# Supabase client (lazy, optional in dev)
+# ---------------------------------------------------------------------------
+
+_sb_client = None
+
+
+def supabase_client():
+    """Return cached Supabase client, or None if not configured (dev mode)."""
+    global _sb_client
+    if _sb_client is not None:
+        return _sb_client
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    if not url or not key:
+        return None
+    try:
+        from supabase import create_client
+    except ImportError:
+        return None
+    _sb_client = create_client(url, key)
+    return _sb_client
+
+
+# ---------------------------------------------------------------------------
+# Pipeline-slot queue (Policy 2: cap concurrent pipelines, wizard is free)
+# ---------------------------------------------------------------------------
+
+def _sweep_orphan_queued():
+    """Fail queued runs older than 30 minutes (abandoned tabs). Cheap, race-safe."""
+    sb = supabase_client()
+    if sb is None:
+        return
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+        sb.table("runs").update({
+            "status": "failed",
+            "rejection_reason": "queue_timeout",
+        }).eq("status", "queued").lt("created_at", cutoff).execute()
+    except Exception:
+        pass
+
+
+class SlotAcquireError(Exception):
+    """Raised when a run can never acquire a slot — missing row or wrong status."""
+
+
+def try_acquire_slot(run_id: str) -> bool:
+    """
+    Atomically promote a draft/queued run to 'running' if a slot is available.
+    Returns True if acquired, False if all slots are full.
+    Raises SlotAcquireError if the run row is missing or in a non-acquirable
+    state (failed/delivered/etc) — those are unrecoverable, not "wait longer".
+
+    Note: count + update is not a single SQL transaction, so a sub-millisecond
+    race window exists where N+1 pipelines could briefly start. Acceptable for
+    MVP — Kling cap is 20 generations, default IGLOO_MAX_PIPELINES=3 ≈ 18.
+    """
+    sb = supabase_client()
+    if sb is None:
+        return True  # dev mode: always acquire
+
+    _sweep_orphan_queued()
+
+    # Check the run actually exists and is in an acquirable state. Without
+    # this, a stale token pointing at a 'failed' row would loop forever in
+    # the queue UI because the UPDATE below would silently match 0 rows.
+    try:
+        row = sb.table("runs").select("status").eq("id", run_id).maybe_single().execute().data
+    except Exception as e:
+        raise SlotAcquireError(f"run lookup failed: {e}") from e
+    if row is None:
+        raise SlotAcquireError(f"run {run_id} not found in database")
+    if row["status"] not in ("draft", "queued"):
+        raise SlotAcquireError(f"run {run_id} is in status {row['status']!r}, not acquirable")
+
+    try:
+        running = sb.table("runs").select("id", count="exact") \
+            .eq("status", "running").execute()
+        running_count = running.count or 0
+    except Exception:
+        return False
+
+    if running_count >= IGLOO_MAX_PIPELINES:
+        return False
+
+    try:
+        result = sb.table("runs").update({
+            "status": "running",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", run_id).in_("status", ["draft", "queued"]).execute()
+    except Exception:
+        return False
+
+    return bool(result.data)
+
+
+def mark_run_queued(run_id: str):
+    sb = supabase_client()
+    if sb is None:
+        return
+    try:
+        sb.table("runs").update({"status": "queued"}) \
+            .eq("id", run_id).in_("status", ["draft"]).execute()
+    except Exception:
+        pass
+
+
+def queue_position(run_id: str) -> int:
+    """Return how many runs are ahead of this one in the queue (0 = next up)."""
+    sb = supabase_client()
+    if sb is None:
+        return 0
+    try:
+        row = sb.table("runs").select("created_at") \
+            .eq("id", run_id).single().execute().data
+        if not row:
+            return 0
+        ahead = sb.table("runs").select("id", count="exact") \
+            .eq("status", "queued").lt("created_at", row["created_at"]).execute()
+        return ahead.count or 0
+    except Exception:
+        return 0
+
+
+def upload_final_to_supabase(run_id: str, final_path: Path) -> tuple[bool, str | None]:
+    sb = supabase_client()
+    if sb is None:
+        return False, "supabase not configured"
+    storage_key = f"{run_id}/final.mp4"
+    try:
+        with open(final_path, "rb") as f:
+            sb.storage.from_("reels").upload(
+                path=storage_key,
+                file=f.read(),
+                file_options={"content-type": "video/mp4", "upsert": "true"},
+            )
+        sb.table("runs").update({
+            "status": "awaiting_review",
+            "storage_path": f"reels/{storage_key}",
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "qc_notes": None,
+            "rejection_reason": None,
+        }).eq("id", run_id).execute()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
+def mark_run_failed(run_id: str, reason: str, qc_notes: str | None = None):
+    sb = supabase_client()
+    if sb is None:
+        return
+    try:
+        sb.table("runs").update({
+            "status": "failed",
+            "rejection_reason": reason[:1000],
+            "qc_notes": (qc_notes or "")[-2000:],
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", run_id).execute()
+    except Exception:
+        pass
+
+
+def fetch_run_prompt(run_id: str) -> str | None:
+    """Pre-fill the wizard's topic field from the runs.prompt set at payment time."""
+    sb = supabase_client()
+    if sb is None:
+        return None
+    try:
+        row = sb.table("runs").select("prompt") \
+            .eq("id", run_id).single().execute().data
+        return row.get("prompt") if row else None
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +401,10 @@ def broadcast_event(event_type: str, data: dict):
 # ---------------------------------------------------------------------------
 
 def load_env(key: str) -> str | None:
+    # Prefer real env (Modal injects secrets here), fall back to .env file for dev.
+    val = os.environ.get(key)
+    if val:
+        return val
     env_path = PROJECT_ROOT / ".env"
     if not env_path.exists():
         return None
@@ -70,9 +412,9 @@ def load_env(key: str) -> str | None:
         for line in f:
             line = line.strip()
             if line.startswith(f"{key}="):
-                val = line.split("=", 1)[1].strip().strip('"').strip("'")
-                if val and not val.startswith("<"):
-                    return val
+                v = line.split("=", 1)[1].strip().strip('"').strip("'")
+                if v and not v.startswith("<"):
+                    return v
     return None
 
 
@@ -88,10 +430,28 @@ def call_gemini(prompt: str, api_key: str, temperature: float = 0.5,
         }
     }
     data = json.dumps(payload).encode()
-    req = urllib.request.Request(url, data=data, method="POST")
-    req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        result = json.loads(resp.read().decode())
+
+    # Gemini 2.5-flash periodically returns 503 (model overloaded) and 429
+    # (rate limit). Overload windows commonly last 30-60s, so retry with
+    # exponential backoff: 2s, 4s, 8s, 16s, 32s = ~62s total budget across
+    # 6 attempts. Holding a gunicorn thread that long is fine given threads=16
+    # and IGLOO_MAX_PIPELINES=3.
+    last_err: Exception | None = None
+    for attempt in range(6):
+        try:
+            req = urllib.request.Request(url, data=data, method="POST")
+            req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                result = json.loads(resp.read().decode())
+                break
+        except urllib.error.HTTPError as e:
+            last_err = e
+            if e.code in (429, 500, 502, 503, 504) and attempt < 5:
+                time.sleep(2 ** (attempt + 1))
+                continue
+            raise
+    else:
+        raise last_err if last_err else RuntimeError("call_gemini exhausted retries")
     parts = result["candidates"][0]["content"]["parts"]
     text = ""
     for part in parts:
@@ -273,12 +633,65 @@ Return ONLY the JSON object. No explanation."""
 
 
 # ---------------------------------------------------------------------------
+# Routes — Health check
+# ---------------------------------------------------------------------------
+# Unauthenticated, no session touch, no DB call. Used by Fly.io machine
+# health checks (fly.toml [[http_service.checks]]). The "/" route below
+# returns 401 for unauthenticated requests, which Fly would treat as
+# unhealthy — so health checks must hit /healthz instead.
+
+@app.route("/healthz")
+def healthz():
+    return {"ok": True, "service": "igloo-studio"}, 200
+
+
+# ---------------------------------------------------------------------------
 # Routes — Pages
 # ---------------------------------------------------------------------------
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    """
+    Entry point. In production, requires a signed studio token via ?token=<t>.
+    In dev (no IGLOO_STUDIO_SECRET set), allows direct access with synthetic
+    session.
+    """
+    token = request.args.get("token")
+    if token:
+        payload = verify_studio_token(token)
+        if not payload:
+            return _render_token_error("Your studio link is invalid or expired."), 401
+        session["igloo"] = {
+            "user_id": payload["user_id"],
+            "run_id": payload["run_id"],
+        }
+    elif IGLOO_DEV_MODE:
+        _ensure_dev_session()
+    elif not current_user_id():
+        return _render_token_error("This studio requires a valid access link from app.igloo.video."), 401
+
+    # Pre-fill topic from runs.prompt if available
+    prefill_topic = ""
+    run_id = current_run_id()
+    if run_id and run_id != "dev-run":
+        prefill_topic = fetch_run_prompt(run_id) or ""
+
+    return render_template(
+        "index.html",
+        igloo_app_url=IGLOO_APP_URL,
+        prefill_topic=prefill_topic,
+        run_id=run_id or "",
+    )
+
+
+def _render_token_error(message: str) -> str:
+    return (
+        "<!doctype html><html><body style='font-family:sans-serif;"
+        "max-width:480px;margin:80px auto;text-align:center;color:#222'>"
+        f"<h1>Studio access</h1><p>{message}</p>"
+        f"<p><a href='{IGLOO_APP_URL}'>Return to Igloo</a></p>"
+        "</body></html>"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +699,7 @@ def index():
 # ---------------------------------------------------------------------------
 
 @app.route("/api/generate-narration", methods=["POST"])
+@require_auth
 def api_generate_narration():
     data = request.json
     theme = data.get("theme", "")
@@ -344,10 +758,14 @@ def api_generate_narration():
             "repair_log": (repair_log + retry_repair_log) or None,
         })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
 
 
 @app.route("/api/edit-narration", methods=["POST"])
+@require_auth
 def api_edit_narration():
     data = request.json
     scenes = data.get("scenes", [])
@@ -368,6 +786,7 @@ def api_edit_narration():
 
 
 @app.route("/api/generate-characters", methods=["POST"])
+@require_auth
 def api_generate_characters():
     data = request.json
     theme = data.get("theme", "")
@@ -390,6 +809,7 @@ def api_generate_characters():
 
 
 @app.route("/api/custom-character", methods=["POST"])
+@require_auth
 def api_custom_character():
     data = request.json
     description = data.get("description", "")
@@ -409,6 +829,7 @@ def api_custom_character():
 
 
 @app.route("/api/assemble-script", methods=["POST"])
+@require_auth
 def api_assemble_script():
     data = request.json
     theme = data.get("theme", "")
@@ -436,20 +857,27 @@ def api_assemble_script():
 
 
 @app.route("/api/save-script", methods=["POST"])
+@require_auth
 def api_save_script():
     data = request.json
     topic = data.get("topic", "")
     script_json = data.get("script", {})
 
+    user_id = current_user_id()
     slug = slugify(topic)
-    output_dir = PROJECT_ROOT / ".tmp" / slug
+    output_dir = user_workdir(user_id, slug)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{slug}_script.json"
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(script_json, f, indent=2, ensure_ascii=False)
 
-    return jsonify({"path": str(output_path), "relative": f".tmp/{slug}/{slug}_script.json"})
+    return jsonify({
+        "path": str(output_path),
+        "relative": str(output_path.relative_to(WORKDIR_ROOT.parent))
+                    if WORKDIR_ROOT.parent in output_path.parents
+                    else str(output_path),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -457,18 +885,20 @@ def api_save_script():
 # ---------------------------------------------------------------------------
 
 @app.route("/api/list-scripts", methods=["GET"])
+@require_auth
 def api_list_scripts():
-    """List all existing script JSON files."""
-    tmp_dir = PROJECT_ROOT / ".tmp"
+    """List the current user's script JSON files."""
+    user_id = current_user_id()
+    user_root = WORKDIR_ROOT / user_id
     scripts = []
-    if tmp_dir.exists():
-        for script_file in tmp_dir.glob("*/*_script.json"):
+    if user_root.exists():
+        for script_file in user_root.glob("*/*_script.json"):
             try:
                 with open(script_file) as f:
                     data = json.load(f)
                 scripts.append({
                     "path": str(script_file),
-                    "relative": str(script_file.relative_to(PROJECT_ROOT)),
+                    "relative": str(script_file),
                     "theme": data.get("theme", ""),
                     "topic": data.get("topic", ""),
                     "scenes": data.get("total_scenes", 0),
@@ -507,182 +937,219 @@ STEP_TIME_ESTIMATES = {
 TOTAL_ESTIMATED = sum(STEP_TIME_ESTIMATES.values())
 
 
-def run_pipeline_thread(script_path: str, speed: float, audio_mode: str,
+def run_pipeline_thread(user_id: str, run_id: str, script_path: str,
+                        speed: float, audio_mode: str,
                         no_captions: bool, start_from: int,
                         auto_go: bool = False,
                         music_volume: float = 0.10,
                         voice_volume: float = 1.5):
-    """Run pipeline steps sequentially in a background thread."""
-    global pipeline_state
-
-    pipeline_state["running"] = True
-    pipeline_state["script_path"] = script_path
-    pipeline_state["logs"] = []
-    pipeline_state["step_statuses"] = {i: "pending" for i in range(1, 9)}
-    pipeline_state["gate_pending"] = False
+    """Run pipeline steps sequentially in a background thread for one user."""
+    state = get_state(user_id)
+    state["running"] = True
+    state["queue_status"] = "running"
+    state["script_path"] = script_path
+    state["run_id"] = run_id
+    state["logs"] = []
+    state["step_statuses"] = {i: "pending" for i in range(1, 9)}
+    state["gate_pending"] = False
 
     steps_to_run = list(range(max(1, start_from), 9))
 
     # Mark steps before start_from as skipped
     for i in range(1, start_from):
-        pipeline_state["step_statuses"][i] = "skipped"
-        broadcast_event("step_status", {"step": i, "status": "skipped", "reason": "Before start step"})
+        state["step_statuses"][i] = "skipped"
+        broadcast_event(user_id, "step_status",
+                        {"step": i, "status": "skipped", "reason": "Before start step"})
 
     # Track cumulative time for progress estimation
     elapsed_total = 0
+    pipeline_failed_reason: str | None = None
+    pipeline_failed_logs: str | None = None
 
-    for step_num in steps_to_run:
-        if not pipeline_state["running"]:
-            break
+    try:
+        for step_num in steps_to_run:
+            if not state["running"]:
+                break
 
-        step_name = STEP_NAMES[step_num]
-        pipeline_state["current_step"] = step_num
-        pipeline_state["step_statuses"][step_num] = "running"
-        broadcast_event("step_status", {"step": step_num, "status": "running", "name": step_name})
+            step_name = STEP_NAMES[step_num]
+            state["current_step"] = step_num
+            state["step_statuses"][step_num] = "running"
+            broadcast_event(user_id, "step_status",
+                            {"step": step_num, "status": "running", "name": step_name})
 
-        # Broadcast cinematic phase + progress
-        remaining_est = sum(STEP_TIME_ESTIMATES[s] for s in range(step_num, 9))
-        completed_est = sum(STEP_TIME_ESTIMATES[s] for s in range(1, step_num))
-        progress_pct = round((completed_est / TOTAL_ESTIMATED) * 100) if TOTAL_ESTIMATED > 0 else 0
-        broadcast_event("phase", {
-            "step": step_num,
-            "message": CINEMATIC_PHASES.get(step_num, step_name),
-            "remaining_seconds": remaining_est,
-            "progress": progress_pct,
-        })
+            # Broadcast cinematic phase + progress
+            remaining_est = sum(STEP_TIME_ESTIMATES[s] for s in range(step_num, 9))
+            completed_est = sum(STEP_TIME_ESTIMATES[s] for s in range(1, step_num))
+            progress_pct = round((completed_est / TOTAL_ESTIMATED) * 100) if TOTAL_ESTIMATED > 0 else 0
+            broadcast_event(user_id, "phase", {
+                "step": step_num,
+                "message": CINEMATIC_PHASES.get(step_num, step_name),
+                "remaining_seconds": remaining_est,
+                "progress": progress_pct,
+            })
 
-        # Build command
-        cmd = _build_step_cmd(step_num, script_path, speed, audio_mode,
-                              no_captions, music_volume, voice_volume)
-        broadcast_event("log", {"text": f"$ {' '.join(cmd)}", "level": "cmd"})
+            # Build command
+            cmd = _build_step_cmd(step_num, script_path, speed, audio_mode,
+                                  no_captions, music_volume, voice_volume)
+            broadcast_event(user_id, "log", {"text": f"$ {' '.join(cmd)}", "level": "cmd"})
 
-        step_start = time.time()
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                cwd=str(PROJECT_ROOT),
-                text=True,
-                bufsize=1
-            )
-            pipeline_state["process"] = proc
+            step_start = time.time()
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    cwd=str(PROJECT_ROOT),
+                    text=True,
+                    bufsize=1
+                )
+                state["process"] = proc
 
-            for line in proc.stdout:
-                line = line.rstrip('\n')
-                pipeline_state["logs"].append(line)
-                broadcast_event("log", {"text": line, "level": "info"})
+                for line in proc.stdout:
+                    line = line.rstrip('\n')
+                    state["logs"].append(line)
+                    broadcast_event(user_id, "log", {"text": line, "level": "info"})
 
-            proc.wait()
-            elapsed = time.time() - step_start
-            elapsed_total += elapsed
+                proc.wait()
+                elapsed = time.time() - step_start
+                elapsed_total += elapsed
 
-            if proc.returncode != 0:
-                pipeline_state["step_statuses"][step_num] = "failed"
-                broadcast_event("step_status", {
-                    "step": step_num, "status": "failed",
-                    "name": step_name, "elapsed": round(elapsed, 1),
-                    "error": f"Exit code {proc.returncode}"
-                })
-
-                if auto_go:
-                    # In auto mode, abort on failure
-                    broadcast_event("pipeline_error", {
-                        "step": step_num,
-                        "error": f"Step {step_num} ({step_name}) failed with exit code {proc.returncode}"
+                if proc.returncode != 0:
+                    state["step_statuses"][step_num] = "failed"
+                    broadcast_event(user_id, "step_status", {
+                        "step": step_num, "status": "failed",
+                        "name": step_name, "elapsed": round(elapsed, 1),
+                        "error": f"Exit code {proc.returncode}"
                     })
-                    break
+                    pipeline_failed_reason = f"step {step_num} ({step_name}) exited {proc.returncode}"
+                    pipeline_failed_logs = "\n".join(state["logs"][-50:])
+
+                    if auto_go:
+                        broadcast_event(user_id, "pipeline_error", {
+                            "step": step_num,
+                            "error": pipeline_failed_reason,
+                        })
+                        break
+                    else:
+                        # Wait for user decision (retry/skip/abort)
+                        state["gate_pending"] = True
+                        state["gate_step"] = step_num
+                        broadcast_event(user_id, "gate", {
+                            "step": step_num, "name": step_name,
+                            "type": "error",
+                            "message": f"Step {step_num} ({step_name}) failed with exit code {proc.returncode}"
+                        })
+                        while state["gate_pending"] and state["running"]:
+                            time.sleep(0.2)
+
+                        gate_response = state.get("gate_response", "abort")
+                        if gate_response == "abort":
+                            break
+                        elif gate_response == "skip":
+                            state["step_statuses"][step_num] = "skipped"
+                            pipeline_failed_reason = None
+                            continue
+                        elif gate_response == "retry":
+                            pipeline_failed_reason = None
+                            continue
                 else:
-                    # Wait for user decision (retry/skip/abort)
-                    pipeline_state["gate_pending"] = True
-                    pipeline_state["gate_step"] = step_num
-                    broadcast_event("gate", {
-                        "step": step_num, "name": step_name,
-                        "type": "error",
-                        "message": f"Step {step_num} ({step_name}) failed with exit code {proc.returncode}"
+                    state["step_statuses"][step_num] = "completed"
+                    broadcast_event(user_id, "step_status", {
+                        "step": step_num, "status": "completed",
+                        "name": step_name, "elapsed": round(elapsed, 1)
                     })
-                    while pipeline_state["gate_pending"] and pipeline_state["running"]:
+
+            except Exception as e:
+                state["step_statuses"][step_num] = "failed"
+                broadcast_event(user_id, "step_status", {
+                    "step": step_num, "status": "failed",
+                    "name": step_name, "error": str(e)
+                })
+                pipeline_failed_reason = f"step {step_num} crashed: {e}"
+                pipeline_failed_logs = "\n".join(state["logs"][-50:])
+                if auto_go:
+                    broadcast_event(user_id, "pipeline_error", {
+                        "step": step_num, "error": str(e)
+                    })
+                break
+
+            # Gate: wait for user GO between steps (only in manual mode)
+            if not auto_go and step_num < 8 and state["running"]:
+                next_step = step_num + 1
+                if next_step <= 8:
+                    state["gate_pending"] = True
+                    state["gate_step"] = step_num
+                    broadcast_event(user_id, "gate", {
+                        "step": step_num, "name": step_name,
+                        "type": "approval",
+                        "next_step": next_step, "next_name": STEP_NAMES[next_step],
+                        "message": f"Step {step_num} ({step_name}) completed. Proceed to Step {next_step} ({STEP_NAMES[next_step]})?"
+                    })
+                    while state["gate_pending"] and state["running"]:
                         time.sleep(0.2)
 
-                    gate_response = pipeline_state.get("gate_response", "abort")
+                    gate_response = state.get("gate_response", "go")
                     if gate_response == "abort":
                         break
                     elif gate_response == "skip":
-                        pipeline_state["step_statuses"][step_num] = "skipped"
-                        continue
-                    elif gate_response == "retry":
-                        continue
-            else:
-                pipeline_state["step_statuses"][step_num] = "completed"
-                broadcast_event("step_status", {
-                    "step": step_num, "status": "completed",
-                    "name": step_name, "elapsed": round(elapsed, 1)
-                })
+                        if next_step <= 8:
+                            state["step_statuses"][next_step] = "skipped"
+                            broadcast_event(user_id, "step_status",
+                                            {"step": next_step, "status": "skipped", "reason": "Skipped by user"})
+                            steps_to_run = [s for s in steps_to_run if s != next_step]
 
-        except Exception as e:
-            pipeline_state["step_statuses"][step_num] = "failed"
-            broadcast_event("step_status", {
-                "step": step_num, "status": "failed",
-                "name": step_name, "error": str(e)
-            })
-            if auto_go:
-                broadcast_event("pipeline_error", {
-                    "step": step_num, "error": str(e)
-                })
-            break
-
-        # Gate: wait for user GO between steps (only in manual mode)
-        if not auto_go and step_num < 8 and pipeline_state["running"]:
-            next_step = step_num + 1
-            if next_step <= 8:
-                pipeline_state["gate_pending"] = True
-                pipeline_state["gate_step"] = step_num
-                broadcast_event("gate", {
-                    "step": step_num, "name": step_name,
-                    "type": "approval",
-                    "next_step": next_step, "next_name": STEP_NAMES[next_step],
-                    "message": f"Step {step_num} ({step_name}) completed. Proceed to Step {next_step} ({STEP_NAMES[next_step]})?"
-                })
-                while pipeline_state["gate_pending"] and pipeline_state["running"]:
-                    time.sleep(0.2)
-
-                gate_response = pipeline_state.get("gate_response", "go")
-                if gate_response == "abort":
+        # Determine success and find output file
+        all_ok = all(
+            state["step_statuses"].get(s) in ("completed", "skipped")
+            for s in range(1, 9)
+        )
+        download_path = None
+        if all_ok:
+            script_dir = Path(script_path).parent
+            for pattern in ["final_reel_optionc.mp4", "final_reel*.mp4"]:
+                matches = list(script_dir.glob(pattern))
+                if matches:
+                    download_path = str(matches[0])
                     break
-                elif gate_response == "skip":
-                    if next_step <= 8:
-                        pipeline_state["step_statuses"][next_step] = "skipped"
-                        broadcast_event("step_status", {"step": next_step, "status": "skipped", "reason": "Skipped by user"})
-                        steps_to_run = [s for s in steps_to_run if s != next_step]
 
-    # Determine success and find output file
-    all_ok = all(
-        pipeline_state["step_statuses"].get(s) in ("completed", "skipped")
-        for s in range(1, 9)
-    )
-    download_path = None
-    if all_ok:
-        script_dir = Path(script_path).parent
-        for pattern in ["final_reel_optionc.mp4", "final_reel*.mp4"]:
-            matches = list(script_dir.glob(pattern))
-            if matches:
-                download_path = str(matches[0])
-                break
+        # Final progress update
+        broadcast_event(user_id, "phase", {
+            "step": 8, "message": "Done.",
+            "remaining_seconds": 0, "progress": 100,
+        })
 
-    # Final progress update
-    broadcast_event("phase", {
-        "step": 8, "message": "Done.",
-        "remaining_seconds": 0, "progress": 100,
-    })
+        redirect_url = None
+        if all_ok and download_path and run_id and run_id != "dev-run":
+            ok, err = upload_final_to_supabase(run_id, Path(download_path))
+            if ok:
+                redirect_url = f"{IGLOO_APP_URL}/runs/{run_id}"
+            else:
+                mark_run_failed(run_id, f"storage upload failed: {err}",
+                                "\n".join(state["logs"][-50:]))
+                broadcast_event(user_id, "pipeline_error", {
+                    "step": 8,
+                    "error": f"Upload to Igloo failed: {err}",
+                })
+                all_ok = False
+        elif not all_ok and run_id and run_id != "dev-run":
+            mark_run_failed(
+                run_id,
+                pipeline_failed_reason or "pipeline aborted",
+                pipeline_failed_logs,
+            )
 
-    pipeline_state["running"] = False
-    pipeline_state["current_step"] = None
-    pipeline_state["process"] = None
-    broadcast_event("pipeline_done", {
-        "statuses": pipeline_state["step_statuses"],
-        "success": all_ok,
-        "download_path": download_path,
-    })
+        broadcast_event(user_id, "pipeline_done", {
+            "statuses": state["step_statuses"],
+            "success": all_ok,
+            "download_path": download_path,
+            "redirect_url": redirect_url,
+        })
+
+    finally:
+        state["running"] = False
+        state["queue_status"] = None
+        state["current_step"] = None
+        state["process"] = None
 
 
 def _build_step_cmd(step_num: int, script_path: str,
@@ -693,10 +1160,9 @@ def _build_step_cmd(step_num: int, script_path: str,
     if step_num == 1:
         return [py, "execution/select_voice.py", script_path, "--auto"]
     elif step_num == 2:
-        cmd = [py, "execution/generate_voiceover.py", script_path]
-        if speed != 1.0:
-            cmd.extend(["--speed", str(speed)])
-        return cmd
+        # Voice is always generated at 1.0x. The pacing speedup is applied
+        # at step 8 via assemble_video --final-speed (pitch-preserving).
+        return [py, "execution/generate_voiceover.py", script_path]
     elif step_num == 3:
         script_dir = str(Path(script_path).parent)
         ts_path = str(Path(script_dir) / "voiceover_timestamps.json")
@@ -713,6 +1179,7 @@ def _build_step_cmd(step_num: int, script_path: str,
     elif step_num == 8:
         cmd = [py, "execution/assemble_video.py", script_path,
                "--audio-mode", audio_mode,
+               "--final-speed", str(speed),
                "--music-volume", str(music_volume),
                "--voice-volume", str(voice_volume)]
         if no_captions:
@@ -722,8 +1189,13 @@ def _build_step_cmd(step_num: int, script_path: str,
 
 
 @app.route("/api/pipeline/start", methods=["POST"])
+@require_auth
 def api_pipeline_start():
-    if pipeline_state["running"]:
+    user_id = current_user_id()
+    run_id = current_run_id()
+    state = get_state(user_id)
+
+    if state["running"]:
         return jsonify({"error": "Pipeline already running"}), 409
 
     data = request.json
@@ -739,10 +1211,36 @@ def api_pipeline_start():
     if not Path(script_path).exists():
         return jsonify({"error": f"Script not found: {script_path}"}), 400
 
+    # Try to claim a pipeline slot. If full, mark queued and let the client poll.
+    try:
+        acquired = try_acquire_slot(run_id)
+    except SlotAcquireError as e:
+        return jsonify({"error": f"run not acquirable: {e}"}), 409
+    if not acquired:
+        mark_run_queued(run_id)
+        state["queue_status"] = "queued"
+        state["script_path"] = script_path
+        # Stash launch params so queue-status can spawn the thread later.
+        state["pending_launch"] = {
+            "script_path": script_path,
+            "speed": speed,
+            "audio_mode": audio_mode,
+            "no_captions": no_captions,
+            "start_from": start_from,
+            "auto_go": auto_go,
+            "music_volume": music_volume,
+            "voice_volume": voice_volume,
+        }
+        return jsonify({
+            "status": "queued",
+            "queue_position": queue_position(run_id),
+        })
+
+    state.pop("pending_launch", None)
     thread = threading.Thread(
         target=run_pipeline_thread,
-        args=(script_path, speed, audio_mode, no_captions, start_from,
-              auto_go, music_volume, voice_volume),
+        args=(user_id, run_id, script_path, speed, audio_mode, no_captions,
+              start_from, auto_go, music_volume, voice_volume),
         daemon=True
     )
     thread.start()
@@ -750,38 +1248,92 @@ def api_pipeline_start():
     return jsonify({"status": "started"})
 
 
+@app.route("/api/pipeline/queue-status", methods=["GET"])
+@require_auth
+def api_pipeline_queue_status():
+    """Polled by the client every ~5s while queued. Re-attempts slot acquire."""
+    user_id = current_user_id()
+    run_id = current_run_id()
+    state = get_state(user_id)
+
+    if state["running"]:
+        return jsonify({"status": "running", "acquired": True})
+
+    if state.get("queue_status") != "queued":
+        return jsonify({"status": "idle", "acquired": False})
+
+    # Try to promote
+    try:
+        promoted = try_acquire_slot(run_id)
+    except SlotAcquireError as e:
+        state["queue_status"] = None
+        state.pop("pending_launch", None)
+        return jsonify({"status": "error", "error": str(e)}), 409
+    if promoted:
+        launch = state.get("pending_launch") or {}
+        state.pop("pending_launch", None)
+        if not launch:
+            return jsonify({"status": "error", "error": "missing launch params"}), 500
+        thread = threading.Thread(
+            target=run_pipeline_thread,
+            args=(user_id, run_id,
+                  launch["script_path"], launch["speed"], launch["audio_mode"],
+                  launch["no_captions"], launch["start_from"], launch["auto_go"],
+                  launch["music_volume"], launch["voice_volume"]),
+            daemon=True
+        )
+        thread.start()
+        return jsonify({"status": "running", "acquired": True})
+
+    return jsonify({
+        "status": "queued",
+        "acquired": False,
+        "queue_position": queue_position(run_id),
+    })
+
+
 @app.route("/api/pipeline/gate", methods=["POST"])
+@require_auth
 def api_pipeline_gate():
+    user_id = current_user_id()
+    state = get_state(user_id)
     data = request.json
     response = data.get("response", "go")  # go, skip, abort, retry
-    pipeline_state["gate_response"] = response
-    pipeline_state["gate_pending"] = False
+    state["gate_response"] = response
+    state["gate_pending"] = False
     return jsonify({"status": "ok"})
 
 
 @app.route("/api/pipeline/stop", methods=["POST"])
+@require_auth
 def api_pipeline_stop():
-    pipeline_state["running"] = False
-    pipeline_state["gate_pending"] = False
-    proc = pipeline_state.get("process")
+    user_id = current_user_id()
+    state = get_state(user_id)
+    state["running"] = False
+    state["gate_pending"] = False
+    proc = state.get("process")
     if proc and proc.poll() is None:
         proc.terminate()
     return jsonify({"status": "stopped"})
 
 
 @app.route("/api/pipeline/status", methods=["GET"])
+@require_auth
 def api_pipeline_status():
+    user_id = current_user_id()
+    state = get_state(user_id)
     return jsonify({
-        "running": pipeline_state["running"],
-        "current_step": pipeline_state["current_step"],
-        "step_statuses": pipeline_state["step_statuses"],
-        "gate_pending": pipeline_state["gate_pending"],
-        "gate_step": pipeline_state["gate_step"],
+        "running": state["running"],
+        "queue_status": state.get("queue_status"),
+        "current_step": state["current_step"],
+        "step_statuses": state["step_statuses"],
+        "gate_pending": state["gate_pending"],
+        "gate_step": state["gate_step"],
     })
 
 
 # ---------------------------------------------------------------------------
-# Routes — Script Editing & Download
+# Routes — Script Editing
 # ---------------------------------------------------------------------------
 
 SCRIPT_EDIT_PROMPT = """Edit the following complete Reel Engine script JSON based on user feedback.
@@ -797,6 +1349,7 @@ Return ONLY the edited JSON object. No explanation."""
 
 
 @app.route("/api/edit-script", methods=["POST"])
+@require_auth
 def api_edit_script():
     data = request.json
     script = data.get("script", {})
@@ -818,17 +1371,8 @@ def api_edit_script():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/download")
-def api_download():
-    path = request.args.get("path", "")
-    resolved = Path(path).resolve()
-    tmp_dir = (PROJECT_ROOT / ".tmp").resolve()
-    if not str(resolved).startswith(str(tmp_dir)):
-        return jsonify({"error": "Invalid path"}), 403
-    if not resolved.exists():
-        return jsonify({"error": "File not found"}), 404
-    return send_file(str(resolved), as_attachment=True,
-                     download_name=resolved.name)
+# /api/download removed — final MP4 is uploaded to Supabase Storage on
+# pipeline completion and served via the Next.js admin → deliver flow.
 
 
 # ---------------------------------------------------------------------------
@@ -836,10 +1380,13 @@ def api_download():
 # ---------------------------------------------------------------------------
 
 @app.route("/api/events")
+@require_auth
 def api_events():
+    user_id = current_user_id()
+    user_queues = get_user_queues(user_id)
     session_id = str(time.time())
     q = queue.Queue()
-    log_queues[session_id] = q
+    user_queues[session_id] = q
 
     def stream():
         try:
@@ -850,7 +1397,7 @@ def api_events():
                 except queue.Empty:
                     yield f"data: {json.dumps({'type': 'ping'})}\n\n"
         finally:
-            log_queues.pop(session_id, None)
+            user_queues.pop(session_id, None)
 
     return Response(stream(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -862,5 +1409,6 @@ def api_events():
 
 if __name__ == "__main__":
     print(f"\n  Reel Engine Web UI")
-    print(f"  http://localhost:5000\n")
+    print(f"  http://localhost:5000")
+    print(f"  dev_mode={IGLOO_DEV_MODE}, max_pipelines={IGLOO_MAX_PIPELINES}\n")
     app.run(debug=False, port=5000, threaded=True)

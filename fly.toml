@@ -1,0 +1,82 @@
+# Igloo studio — Fly.io app config.
+#
+# Replaces infra/modal/igloo_worker.py. See .tmp/fly_migration_impact.md
+# §4.2 for the spec this implements and §3.1 for why this app must NEVER
+# horizontally scale.
+#
+# Deploy with:
+#   fly deploy
+#
+# Set secrets in one shot (see impact doc §5):
+#   fly secrets set SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... ...
+#
+# View logs:  fly logs
+# Restart:    fly apps restart igloo-studio
+# Status:     fly status
+
+app = "igloo-studio"
+primary_region = "bom"   # Mumbai — same region as Supabase (ap-south-1)
+
+[build]
+  dockerfile = "Dockerfile"
+  # Build context is repo root (where this fly.toml lives).
+
+[env]
+  # Non-secret runtime config. Secrets come from `fly secrets set`.
+  IGLOO_MAX_PIPELINES = "3"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+  # CRITICAL: studio must stay warm 24/7.
+  #   - auto_stop_machines = false : never stop on idle
+  #   - auto_start_machines = false : we don't want lazy starts either,
+  #     because cold start is ~10s of gunicorn import
+  #   - min_machines_running = 1 : exactly one warm machine, always
+  #
+  # CRITICAL: never run `fly scale count 2` on this app. web_app.py holds
+  # per-user pipeline state in process memory (_pipeline_states, _log_queues
+  # at execution/web_app.py:133-134). Multiple machines = split state =
+  # SSE half-works = pipelines vanish from the originating tab.
+  # See impact doc §3.1 for the full reasoning.
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    grace_period = "30s"   # gunicorn import takes ~5–10s; give it room
+    interval = "15s"
+    method = "get"
+    timeout = "5s"
+    # Hits /healthz, NOT /. The studio's / route returns 401 for
+    # unauthenticated requests (the bad-token bounce); Fly would mark
+    # the machine permanently unhealthy. /healthz is unauthenticated and
+    # returns 200 — added to web_app.py per impact doc §4.3.
+    path = "/healthz"
+
+[[vm]]
+  size = "performance-2x"
+  memory = "4gb"
+  # Studio is an orchestrator — heavy lifting is on Kling/ElevenLabs/Gemini —
+  # but the assembly step (execution/assemble_video.py build_xfade_concat)
+  # builds a single-filtergraph xfade chain that demuxes all N input streams
+  # concurrently. With N≈9 normalized 1080×1920 clips this needs ~3gb peak.
+  #
+  # History (s30→s32): we started on shared-cpu-1x/1gb, OOM'd, bumped to 2gb,
+  # OOM'd again. s31 refactored to pairwise xfade to make memory O(1) — that
+  # worked but the N-1 sequential ffmpeg invocations on a single shared vCPU
+  # took ~2 hours (vs ~5-10 min for single-pass on a bigger box) because of
+  # noisy-neighbor steal. Pairwise was the wrong call: bounded-N workload,
+  # vertical scaling beats algorithmic refactor. See s32 checkpoint and
+  # memory feedback_pay_for_box.md.
+  #
+  # s32 resolution: bump to shared-cpu-2x + 4gb (~$6/mo) and revert pairwise
+  # to the single-pass chain. shared-cpu-1x hard caps at 2gb; the 2x class
+  # allows up to 8gb. 4gb gives comfortable headroom over the ~3gb peak.
+  #
+  # s33: bump to performance-2x + 4gb (~$60/mo) for dedicated cores — shared
+  # vCPUs had ~85% steal, making step 8 assembly take ~51 min. Combined with
+  # A1 (merge caption burn + speed-adjust) and A2 (merge trim + normalize),
+  # step 8 should drop to ~8-10 min on dedicated cores.

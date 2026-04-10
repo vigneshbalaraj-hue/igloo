@@ -1,0 +1,65 @@
+# Keep the docker build context tiny. Only what the Dockerfile COPYs needs
+# to be sent to the daemon: execution/, tools/fonts/, data/.
+# Everything else is dev-only or downstream of build.
+
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# Next.js gate (separate deploy on Vercel)
+app/
+
+# Landing site (separate deploy)
+landing/
+
+# Modal (being replaced by this image)
+infra/modal/
+
+# Supabase migrations (run via supabase CLI, not shipped to runtime)
+infra/supabase/
+
+# Fly artifacts — fly itself reads these from the build context root
+# but they don't belong in the image
+fly.toml
+.fly/
+
+# Docs / planning
+*.md
+directives/
+.tmp/
+.claude/
+
+# BUT: execution/prompt_bank.md is loaded at runtime by prompt_bank.py:31
+# (and crashes on missing). Re-include all .md files inside execution/.
+!execution/*.md
+
+# Python dev junk
+**/__pycache__
+**/*.pyc
+**/*.pyo
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Tools we explicitly DO NOT want in the image
+tools/ffmpeg.exe
+tools/ffprobe.exe
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local env files — secrets come from `fly secrets set`, never from
+# baked-in .env files. Belt and suspenders.
+.env
+.env.*
+**/.env
+**/.env.*
+
+# Don't ignore the Dockerfile or .dockerignore themselves
+!Dockerfile
+!.dockerignore

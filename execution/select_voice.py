@@ -50,8 +50,11 @@ def load_env(key: str) -> str:
 
 
 def update_env(key: str, value: str):
+    # Lives at PROJECT_ROOT/.env. On Modal there's no committed .env file
+    # (secrets come in as env vars), so we create it on first write so the
+    # next pipeline step's load_env() can pick it up via the file fallback.
     env_path = Path(__file__).resolve().parent.parent / ".env"
-    lines = env_path.read_text().splitlines()
+    lines = env_path.read_text().splitlines() if env_path.exists() else []
     found = False
     for i, line in enumerate(lines):
         if line.strip().startswith(f"{key}="):
@@ -60,7 +63,10 @@ def update_env(key: str, value: str):
             break
     if not found:
         lines.append(f"{key}={value}")
-    env_path.write_text("\n".join(lines) + "\n")
+    try:
+        env_path.write_text("\n".join(lines) + "\n")
+    except OSError as e:
+        print(f"WARN: could not write {env_path}: {e}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------

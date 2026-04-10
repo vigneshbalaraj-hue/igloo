@@ -163,6 +163,7 @@
     /* ─── Header ─── */
     .header {
       margin-bottom: 48px;
+      position: relative;
     }
     .header h1 {
       font-size: 32px;
@@ -179,6 +180,66 @@
       color: var(--text-secondary);
       margin-top: 6px;
       max-width: 65ch;
+    }
+    .header-back {
+      position: absolute;
+      top: 4px;
+      right: 0;
+      font-size: 13px;
+      font-weight: 400;
+      color: var(--text-muted);
+      text-decoration: none;
+      padding: 6px 12px;
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      transition: all 0.2s;
+    }
+    .header-back:hover {
+      color: var(--text);
+      border-color: var(--border);
+      background: var(--surface);
+    }
+
+    /* ─── Queue View ─── */
+    .queue-view {
+      min-height: 70vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      animation: fadeSlideIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .queue-icon {
+      width: 64px; height: 64px;
+      border-radius: 50%;
+      background: var(--accent-glow);
+      border: 2px solid var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 32px;
+      animation: breathe 3s ease-in-out infinite;
+      font-size: 24px;
+      color: var(--accent-light);
+      font-weight: 700;
+    }
+    .queue-title {
+      font-size: 28px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin-bottom: 12px;
+    }
+    .queue-position {
+      font-size: 16px;
+      color: var(--accent-light);
+      font-weight: 500;
+      margin-bottom: 8px;
+    }
+    .queue-sub {
+      font-size: 14px;
+      color: var(--text-muted);
+      max-width: 50ch;
+      line-height: 1.6;
+      font-weight: 300;
     }
 
     /* ─── Stepper ─── */
@@ -617,6 +678,9 @@
     <header class="header">
       <h1>Reel <span>Engine</span></h1>
       <p>From idea to cinematic reel. In minutes.</p>
+      {% if igloo_app_url %}
+      <a href="{{ igloo_app_url }}" class="header-back">← Back to Igloo</a>
+      {% endif %}
     </header>
 
     <!-- ═══════════════ CREATE VIEW ═══════════════ -->
@@ -656,7 +720,7 @@
           </div>
           <div class="field">
             <label>Topic</label>
-            <input type="text" id="inp-topic" placeholder="e.g., Fasting when sick">
+            <input type="text" id="inp-topic" placeholder="e.g., Fasting when sick" value="{{ prefill_topic|e }}">
           </div>
         </div>
         <div class="field" style="max-width:200px">
@@ -729,6 +793,16 @@
       </div>
     </div>
 
+    <!-- ═══════════════ QUEUE VIEW ═══════════════ -->
+    <div id="view-queue" class="hidden">
+      <div class="queue-view">
+        <div class="queue-icon">⏳</div>
+        <div class="queue-title">You're in the queue.</div>
+        <div class="queue-position" id="queue-position">Position #1</div>
+        <div class="queue-sub">Your reel will start rendering as soon as a slot opens. Keep this tab open — we'll switch you over automatically.</div>
+      </div>
+    </div>
+
     <!-- ═══════════════ PROGRESS VIEW ═══════════════ -->
     <div id="view-progress" class="hidden">
       <div class="progress-view">
@@ -748,10 +822,9 @@
         <div class="complete-check">
           <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
         </div>
-        <div class="complete-title">Your reel is ready.</div>
-        <div class="complete-sub" id="complete-sub">Crafted and assembled, just for you.</div>
-        <a class="btn-download" id="download-link" href="#" download>Download Reel</a>
-        <button class="create-another" onclick="startOver()">Create another reel</button>
+        <div class="complete-title">Your reel is under review.</div>
+        <div class="complete-sub" id="complete-sub">Our team does a final quality check on every reel before delivery. You'll be notified when it's ready.</div>
+        <div class="complete-sub" id="complete-redirect" style="margin-top:8px;color:var(--text-muted)">Redirecting you back to Igloo…</div>
       </div>
     </div>
 
@@ -773,6 +846,10 @@
   </div>
 
   <script>
+    // ═══════════════ CONFIG (from Flask template) ═══════════════
+    const IGLOO_APP_URL = {{ igloo_app_url|tojson }};
+    const IGLOO_RUN_ID = {{ run_id|tojson }};
+
     // ═══════════════ STATE ═══════════════
     const state = {
       theme: '', topic: '', duration: 40, userScript: '',
@@ -784,10 +861,17 @@
       pipelineStartTime: null,
     };
     let eventSource = null;
+    let queuePollTimer = null;
+
+    // Pre-fill topic from state if server injected it
+    (function initPrefill() {
+      const topicEl = document.getElementById('inp-topic');
+      if (topicEl && topicEl.value) state.topic = topicEl.value.trim();
+    })();
 
     // ═══════════════ VIEW MANAGEMENT ═══════════════
     function showView(view) {
-      ['view-create', 'view-progress', 'view-complete', 'view-error'].forEach(v =>
+      ['view-create', 'view-queue', 'view-progress', 'view-complete', 'view-error'].forEach(v =>
         document.getElementById(v).classList.add('hidden'));
       document.getElementById(`view-${view}`).classList.remove('hidden');
     }
@@ -1067,13 +1151,8 @@
         });
         state.savedPath = saveData.path;
 
-        // Switch to progress view
-        showView('progress');
-        state.pipelineStartTime = Date.now();
-        connectSSE();
-
-        // Start auto pipeline
-        await apiPost('/api/pipeline/start', {
+        // Kick off the pipeline (may come back queued).
+        const launchResp = await apiPost('/api/pipeline/start', {
           script_path: saveData.path,
           speed: 1.3,
           audio_mode: 'option-c',
@@ -1083,12 +1162,56 @@
           music_volume: 0.10,
           voice_volume: 1.5,
         });
+
+        if (launchResp.status === 'queued') {
+          showQueue(launchResp.queue_position);
+        } else {
+          showView('progress');
+          state.pipelineStartTime = Date.now();
+          connectSSE();
+        }
       } catch (e) {
         showView('error');
         document.getElementById('error-message').textContent = e.message;
       } finally {
         btn.disabled = false;
         btn.textContent = 'Create My Reel';
+      }
+    }
+
+    // ═══════════════ QUEUE POLLING ═══════════════
+    function showQueue(position) {
+      showView('queue');
+      updateQueuePosition(position);
+      stopQueuePolling();
+      queuePollTimer = setInterval(pollQueueStatus, 5000);
+    }
+
+    function stopQueuePolling() {
+      if (queuePollTimer) { clearInterval(queuePollTimer); queuePollTimer = null; }
+    }
+
+    function updateQueuePosition(position) {
+      const el = document.getElementById('queue-position');
+      if (position == null) el.textContent = 'Waiting for a free slot…';
+      else el.textContent = `Position #${position}`;
+    }
+
+    async function pollQueueStatus() {
+      try {
+        const res = await fetch('/api/pipeline/queue-status');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.acquired) {
+          stopQueuePolling();
+          showView('progress');
+          state.pipelineStartTime = Date.now();
+          connectSSE();
+        } else if (data.status === 'queued') {
+          updateQueuePosition(data.queue_position);
+        }
+      } catch (e) {
+        // transient network errors — keep polling
       }
     }
 
@@ -1112,15 +1235,22 @@
             break;
           case 'pipeline_done':
             if (eventSource) eventSource.close();
-            if (data.success && data.download_path) {
-              document.getElementById('download-link').href =
-                '/api/download?path=' + encodeURIComponent(data.download_path);
-              const elapsed = Math.round((Date.now() - state.pipelineStartTime) / 1000);
+            if (data.success) {
+              const elapsed = Math.round((Date.now() - (state.pipelineStartTime || Date.now())) / 1000);
               const mins = Math.floor(elapsed / 60);
               const secs = elapsed % 60;
               document.getElementById('complete-sub').textContent =
-                `Crafted in ${mins}m ${secs}s. Ready to share.`;
+                `Crafted in ${mins}m ${secs}s. Our team does a final quality check on every reel before delivery.`;
               showView('complete');
+              const target = data.redirect_url || IGLOO_APP_URL;
+              if (target) {
+                const redirEl = document.getElementById('complete-redirect');
+                if (redirEl) redirEl.textContent = 'Redirecting you back to Igloo…';
+                setTimeout(() => { window.location.href = target; }, 3000);
+              } else {
+                const redirEl = document.getElementById('complete-redirect');
+                if (redirEl) redirEl.textContent = '';
+              }
             } else {
               showView('error');
               document.getElementById('error-message').textContent =
@@ -1145,13 +1275,8 @@
     // ═══════════════ RETRY / START OVER ═══════════════
     async function retryPipeline() {
       if (!state.savedPath) { startOver(); return; }
-      showView('progress');
-      state.pipelineStartTime = Date.now();
-      document.getElementById('phase-text').textContent = 'Retrying...';
-      document.getElementById('progress-fill').style.width = '0%';
-      connectSSE();
       try {
-        await apiPost('/api/pipeline/start', {
+        const launchResp = await apiPost('/api/pipeline/start', {
           script_path: state.savedPath,
           speed: 1.3,
           audio_mode: 'option-c',
@@ -1161,6 +1286,15 @@
           music_volume: 0.10,
           voice_volume: 1.5,
         });
+        if (launchResp.status === 'queued') {
+          showQueue(launchResp.queue_position);
+        } else {
+          showView('progress');
+          state.pipelineStartTime = Date.now();
+          document.getElementById('phase-text').textContent = 'Retrying...';
+          document.getElementById('progress-fill').style.width = '0%';
+          connectSSE();
+        }
       } catch (e) {
         showView('error');
         document.getElementById('error-message').textContent = e.message;
