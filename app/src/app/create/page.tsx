@@ -1,8 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
+
+// Display-only pricing (sticker). The actual charge is ₹1,249 INR via
+// Razorpay — disclosed below the sticker. Keep these values in sync with
+// app/src/lib/razorpay.ts.
+const DISPLAY_USD = "14.99";
+const DISPLAY_STRIKETHROUGH_USD = "19.99";
+const DISPLAY_INR_DISCLOSURE = "Charged as ₹1,249 INR";
 
 type RazorpayHandlerResponse = {
   razorpay_order_id: string;
@@ -47,7 +53,6 @@ function loadRazorpayScript(): Promise<boolean> {
 }
 
 export default function CreatePage() {
-  const router = useRouter();
   const { user, isLoaded } = useUser();
   const [topic, setTopic] = useState("");
   const [busy, setBusy] = useState(false);
@@ -112,8 +117,11 @@ export default function CreatePage() {
                 const t = await triggerRes.text();
                 throw new Error(`Trigger failed: ${t}`);
               }
-              const { run_id } = await triggerRes.json();
-              router.push(`/runs/${run_id}`);
+              const { studio_url } = await triggerRes.json();
+              if (!studio_url) throw new Error("Missing studio URL in response.");
+              // Full navigation so the Flask session cookie lands on
+              // the Modal subdomain.
+              window.location.href = studio_url;
               resolve();
             } catch (e) {
               reject(e);
@@ -151,6 +159,14 @@ export default function CreatePage() {
           className="w-full rounded-xl bg-neutral-900 border border-neutral-800 px-4 py-3 text-base resize-y focus:outline-none focus:ring-2 focus:ring-white/30"
         />
 
+        <div className="mt-8 rounded-2xl border border-neutral-800 bg-neutral-950 px-6 py-5">
+          <div className="flex items-baseline gap-3">
+            <span className="text-4xl font-semibold tracking-tight">${DISPLAY_USD}</span>
+            <span className="text-lg text-neutral-500 line-through">${DISPLAY_STRIKETHROUGH_USD}</span>
+          </div>
+          <p className="mt-1 text-sm text-neutral-400">{DISPLAY_INR_DISCLOSURE}</p>
+        </div>
+
         {error && (
           <div className="mt-4 rounded-lg bg-red-950 border border-red-900 text-red-200 px-4 py-3 text-sm">
             {error}
@@ -162,12 +178,9 @@ export default function CreatePage() {
           disabled={busy}
           className="mt-6 w-full rounded-full bg-white text-black px-6 py-4 font-medium hover:bg-neutral-200 transition disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {busy ? "Working…" : "Buy 1 reel — ₹420"}
+          {busy ? "Working…" : `Buy 1 reel — $${DISPLAY_USD}`}
         </button>
 
-        <p className="mt-4 text-xs text-neutral-500 text-center">
-          Test mode. No real charge will be made.
-        </p>
       </div>
     </main>
   );

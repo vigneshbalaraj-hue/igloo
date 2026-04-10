@@ -41,8 +41,8 @@ export async function POST(req: NextRequest) {
       keyId: process.env.RAZORPAY_KEY_ID,
     });
   } catch (e) {
-    console.error("[razorpay/order] error", e);
-    const detail = e instanceof Error ? e.message : String(e);
+    console.error("[razorpay/order] error", JSON.stringify(e, null, 2));
+    const detail = e instanceof Error ? e.message : JSON.stringify(e);
     return NextResponse.json(
       { error: "razorpay_order_failed", detail },
       { status: 500 }

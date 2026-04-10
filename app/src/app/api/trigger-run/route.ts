@@ -80,5 +80,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: result.error }, { status: result.status });
   }
 
-  return NextResponse.json({ run_id: result.run_id, created: result.created });
+  return NextResponse.json({
+    run_id: result.run_id,
+    created: result.created,
+    studio_url: result.studio_url,
+  });
 }

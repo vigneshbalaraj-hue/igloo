@@ -8,8 +8,19 @@
 import "server-only";
 import { getServerSupabase, getOrCreateUser } from "@/lib/supabase-server";
 import { REEL_PRICE_PAISE } from "@/lib/razorpay";
+import { mintStudioToken } from "@/lib/studio-token";
 
-const MODAL_TRIGGER_URL = process.env.MODAL_TRIGGER_URL!;
+const IGLOO_STUDIO_URL = process.env.IGLOO_STUDIO_URL!;
+const STUDIO_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+
+function buildStudioUrl(run_id: string, user_id: string): string {
+  const token = mintStudioToken({
+    run_id,
+    user_id,
+    exp: Date.now() + STUDIO_TOKEN_TTL_MS,
+  });
+  return `${IGLOO_STUDIO_URL}/?token=${encodeURIComponent(token)}`;
+}
 
 export type ProcessPaymentInput = {
   clerkUserId: string;
@@ -23,7 +34,7 @@ export type ProcessPaymentInput = {
 };
 
 export type ProcessPaymentResult =
-  | { ok: true; run_id: string; created: boolean }
+  | { ok: true; run_id: string; created: boolean; studio_url: string }
   | { ok: false; error: string; status: number };
 
 export async function processPayment(input: ProcessPaymentInput): Promise<ProcessPaymentResult> {
@@ -76,7 +87,12 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
   }
 
   if (existingRun) {
-    return { ok: true, run_id: existingRun.id, created: false };
+    return {
+      ok: true,
+      run_id: existingRun.id,
+      created: false,
+      studio_url: buildStudioUrl(existingRun.id, dbUser.id),
+    };
   }
 
   // 4. Insert credit GRANT for this payment. Idempotent: a unique
@@ -108,12 +124,15 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
 
   // 5. Insert the run. The unique index on runs.payment_id protects
   //    against the race where two callers got past the SELECT above.
+  //    status='draft' — user has paid but hasn't finished the studio
+  //    wizard yet. Flips to 'running' or 'queued' when they click
+  //    "Create My Reel" inside the Flask studio.
   const { data: run, error: runErr } = await supabase
     .from("runs")
     .insert({
       user_id: dbUser.id,
       payment_id: payment.id,
-      status: "queued",
+      status: "draft",
       prompt: input.topic,
     })
     .select("id")
@@ -127,7 +146,14 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
         .select("id")
         .eq("payment_id", payment.id)
         .single();
-      if (raced) return { ok: true, run_id: raced.id, created: false };
+      if (raced) {
+        return {
+          ok: true,
+          run_id: raced.id,
+          created: false,
+          studio_url: buildStudioUrl(raced.id, dbUser.id),
+        };
+      }
     }
     console.error("[processPayment] run insert failed", runErr);
     return { ok: false, error: "run_insert_failed", status: 500 };
@@ -147,30 +173,13 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
     console.error("[processPayment] credit consumption insert failed (non-fatal)", consumeErr);
   }
 
-  // 5. Fire Modal trigger
-  try {
-    const modalRes = await fetch(MODAL_TRIGGER_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ run_id: run.id }),
-    });
-    if (!modalRes.ok) {
-      const t = await modalRes.text();
-      console.error("[processPayment] modal trigger non-2xx", modalRes.status, t);
-      await supabase
-        .from("runs")
-        .update({ status: "failed", rejection_reason: `modal_trigger_${modalRes.status}` })
-        .eq("id", run.id);
-      return { ok: false, error: "modal_trigger_failed", status: 502 };
-    }
-  } catch (e) {
-    console.error("[processPayment] modal trigger threw", e);
-    await supabase
-      .from("runs")
-      .update({ status: "failed", rejection_reason: "modal_trigger_network" })
-      .eq("id", run.id);
-    return { ok: false, error: "modal_trigger_network", status: 502 };
-  }
-
-  return { ok: true, run_id: run.id, created: true };
+  // 7. Mint a signed studio URL — the browser navigates here after
+  //    payment capture. No Modal trigger call; the Flask studio is
+  //    always warm via min_containers=1.
+  return {
+    ok: true,
+    run_id: run.id,
+    created: true,
+    studio_url: buildStudioUrl(run.id, dbUser.id),
+  };
 }

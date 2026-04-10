@@ -7,6 +7,7 @@ import { createBrowserSupabase } from "@/lib/supabase";
 type Run = {
   id: string;
   status:
+    | "draft"
     | "queued"
     | "running"
     | "awaiting_review"
@@ -20,6 +21,7 @@ type Run = {
 };
 
 const STATUS_COPY: Record<Run["status"], string> = {
+  draft: "You haven't finished designing your reel yet.",
   queued: "Warming up the engines…",
   running: "Crafting your reel — this takes about 8 minutes.",
   awaiting_review: "Almost done — final quality check.",
@@ -37,6 +39,25 @@ export default function RunPage({
   const { getToken, isLoaded } = useAuth();
   const [run, setRun] = useState<Run | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [resuming, setResuming] = useState(false);
+
+  async function handleResume() {
+    setResuming(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/runs/${id}/resume`, { method: "POST" });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`Resume failed: ${t}`);
+      }
+      const { studio_url } = await res.json();
+      if (!studio_url) throw new Error("Missing studio URL in response.");
+      window.location.href = studio_url;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setResuming(false);
+    }
+  }
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -57,7 +78,12 @@ export default function RunPage({
           setError(error.message);
         } else if (data) {
           setRun(data as Run);
-          if (data.status !== "delivered" && data.status !== "failed" && data.status !== "rejected") {
+          if (
+            data.status !== "delivered" &&
+            data.status !== "failed" &&
+            data.status !== "rejected" &&
+            data.status !== "draft"
+          ) {
             timer = setTimeout(poll, 5000);
           }
         }
@@ -121,6 +147,16 @@ export default function RunPage({
               >
                 Download your reel
               </a>
+            )}
+
+            {run.status === "draft" && (
+              <button
+                onClick={handleResume}
+                disabled={resuming}
+                className="mt-6 w-full rounded-full bg-white text-black px-6 py-4 font-medium hover:bg-neutral-200 transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {resuming ? "Opening studio…" : "Return to studio"}
+              </button>
             )}
           </>
         )}

@@ -54,5 +54,9 @@ export async function POST(
     return NextResponse.json({ error: updateErr.message }, { status: 500 });
   }
 
+  // TODO Phase 10: send customer delivery email via Resend with signed
+  // download link. Intentionally deferred — see GOAL.md "Known deferred
+  // capabilities" and .tmp/checkpoint_2026-04-08_session27.md.
+
   return NextResponse.json({ ok: true });
 }
