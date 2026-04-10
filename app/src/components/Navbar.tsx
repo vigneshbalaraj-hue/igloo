@@ -37,6 +37,9 @@ export default function Navbar() {
               </Link>
             </Show>
             <Show when="signed-in">
+              <Link href="/profile" className="text-sm text-text-secondary hover:text-foreground transition-colors duration-300">
+                Profile
+              </Link>
               <Link href="/create" className="btn-primary !py-2 !px-5 !text-sm">
                 Create a video
               </Link>
@@ -108,6 +111,9 @@ export default function Navbar() {
             </Link>
           </Show>
           <Show when="signed-in">
+            <Link href="/profile" className="btn-secondary" onClick={() => setOpen(false)}>
+              Profile
+            </Link>
             <Link href="/create" className="btn-primary" onClick={() => setOpen(false)}>
               Create a video
             </Link>
