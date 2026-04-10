@@ -96,21 +96,22 @@ Be pragmatic. Be reliable. Self-anneal.
 
 ## Current state (Igloo launch)
 
-**Latest checkpoint:** `.tmp/checkpoint_2026-04-10_session34.md` — start here. (Predecessors: s33, s32, s31.)
+**Latest checkpoint:** `.tmp/checkpoint_2026-04-10_session36.md` — start here. (Predecessors: s35, s34, s33, s32, s31.)
 
-- **Session 34 — First live paid reel delivered. Razorpay working. Credits system analyzed.** Fixed Razorpay 401 (trailing `\n` in all 14 Vercel env vars — always use `printf` not `echo` when piping to Vercel CLI). Committed all outstanding work (4 commits: Fly migration, A1/A2, studio handoff, infra). Reviewed Kaushik's PR #1 (landing redesign) — not merged, has critical pricing/z-index issues. Analyzed 2-tier credits system (1 reel ₹999 / 2 reels ₹1,249) — ready to build.
-- **Production domains (all live):**
-  - Landing: `www.igloo.video` → Vercel project `igloo` (root dir: `landing/`)
-  - Gate: `app.igloo.video` → Vercel project `igloo-gate` (root dir: `app/`)
+- **Session 35–36 — 2-tier credits system built, landing page merged, domains unified.** Built credits/bundle pricing (single $9.99/1 reel, double $14.99/2 reels). Merged Kaushik's landing PR #1 with CSS scoping fixes. Migrated all domains to igloo-gate. Fixed Clerk env vars + middleware video blocking.
+- **Production domains (all serve igloo-gate):**
+  - `igloo.video` → Vercel project `igloo-gate` (root dir: `app/`)
+  - `www.igloo.video` → Vercel project `igloo-gate`
+  - `app.igloo.video` → Vercel project `igloo-gate`
   - Studio: `igloo-studio.fly.dev` → Fly `performance-2x` (2 dedicated vCPUs, 4gb)
   - Fly `IGLOO_APP_URL` = `https://www.igloo.video`
-- **Razorpay is LIVE MODE and working.** Keys: `rzp_live_Sbg199N6mjjpuR`. International Cards enabled. Webhook: `https://app.igloo.video/api/razorpay/webhook`. First real payment processed in s34.
+- **Git auto-deploy active.** igloo-gate connected to `vigneshbalaraj-hue/igloo`, root dir `app/`. Push to main triggers deploy. **Never use `vercel --prod` CLI** — it skips large binary files.
+- **Razorpay is LIVE MODE and working.** Keys: `rzp_live_Sbg199N6mjjpuR`. International Cards enabled. Webhook: `https://app.igloo.video/api/razorpay/webhook`.
+- **2-tier pricing live.** Single (₹999, 1 credit) / Double (₹1,249, 2 credits). Shared constants in `app/src/lib/pricing.ts`. Credit redemption via Postgres `redeem_credit()` function. `/create` shows tier selector + credit balance.
+- **Landing page in Next.js app.** CSS scoped under `.landing-theme`. Old Vite `igloo` project is orphaned. Clerk middleware skips video extensions (`proxy.ts` matcher).
 - **Admin access:** Clerk public metadata `{ "role": "admin" }` + custom session token `{ "metadata": "{{user.public_metadata}}" }`. `/admin` shows running/queued/awaiting_review runs.
-- **Vercel env vars:** Never use `echo` to pipe values — always `printf` (no trailing newline). The `\n` bug silently breaks auth on every service.
-- **Vercel deployment: use Git push, NOT `vercel --prod` CLI.** Gate (`igloo-gate`) needs Git integration connected (Vercel Dashboard → Settings → Git, root dir `app/`).
-- **PR #1 (Kaushik landing redesign):** Branch `landing-redesign`, 3196 additions. NOT merged — waiting on credits system build + critical fixes (pricing text, noise z-index, `"use client"` on FinalCTA). `Landing page/` folder at repo root has merge instructions.
-- **Next workstream: credits/bundle pricing.** Full analysis in s34 checkpoint. DB already supports it (credits ledger + user_balances view). Need: Postgres `redeem_credit()` function, pricing tiers, new endpoints, `/create` UI. Open decision: refund policy for partial bundle.
+- **Clerk keys are `pk_test_`/`sk_test_`** (Development instance, `rich-piranha-3`). Works fine, shows dev badge. Production Clerk migration deferred.
+- **Vercel env vars:** Never use `echo` to pipe values — always `printf` (no trailing newline).
 - **flyctl in bash:** `~/.fly/bin/flyctl.exe`. Deploy: `~/.fly/bin/flyctl.exe deploy` from repo root. **Never** `fly scale count 2`.
-- **Assembly pipeline post-A1/A2:** 3 encode passes (trim+normalize per clip → xfade chain → caption+speed burn). Performance-2x + A1/A2 combination still untested (s33 test was on shared-cpu-2x without A1/A2).
-- **Deferred:** email on deliver (Phase 10), Razorpay refund API, `run_pipeline.py:251` CLI `--speed` fix, clean up stale env vars on `igloo` landing Vercel project.
+- **Deferred:** Clerk production keys, CDN for landing assets (~21MB), profile/dashboard page, email on deliver, Razorpay refund API, `run_pipeline.py:251` CLI `--speed` fix, clean up old `igloo` Vercel project.
 - **Stack:** Next 16 + React 19 + Tailwind 4 + Clerk 7. Use `./node_modules/.bin/tsc` not `npx tsc`.
