@@ -607,8 +607,6 @@ Structure:
          "image_prompt": "<photorealistic, camera specs, concrete visuals>",
          "video_prompt": "<slow camera movement + subtle motion>" }},
        "caption_text": "..." }},
-
-    <B-ROLL with >12 words: SPLIT into clips array with clip_id "Na", "Nb">
   ],
   "audio": {{
     "voice_over": {{ "full_script": "<all narration joined>", "file": "voiceover.mp3",

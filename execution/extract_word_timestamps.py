@@ -118,8 +118,13 @@ def update_script_timestamps(script_path: Path, words: list):
         scene["narration_end"] = narration_end
         scene["scene_duration"] = scene_duration
 
-        # Update audio_slice for anchor/lip-sync scenes
+        # Update video_generation fields based on scene type
         vg = scene.get("video_generation", {})
+
+        # Dynamic kling_duration for b-roll: 10s if narration > 5s, else 5s
+        if vg.get("method") == "image-to-video":
+            vg["kling_duration"] = 10 if scene_duration > 5.0 else 5
+
         if vg.get("method") == "lip-sync":
             vg["audio_slice"] = [narration_start, narration_end]
             vg["kling_duration"] = f"driven by audio ({scene_duration}s)"

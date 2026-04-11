@@ -523,37 +523,6 @@ Generate the COMPLETE script JSON with all fields. Follow this exact structure:
       "caption_text": "<from narration>"
     }}
 
-    <If a b-roll scene narration is >5s (>12 words), SPLIT it into clips:>
-    {{
-      "scene_id": <int>,
-      "type": "b-roll",
-      "narration_text": "<full narration>",
-      "video_generation": {{
-        "method": "image-to-video",
-        "stitch_strategy": "<describe the visual contrast between clips>",
-        "clips": [
-          {{
-            "clip_id": "<scene_id>a",
-            "voice_emotion": "...",
-            "narration_text": "<first half>",
-            "kling_duration": 5,
-            "trim_to": <estimate>,
-            "image_prompt": "...",
-            "video_prompt": "..."
-          }},
-          {{
-            "clip_id": "<scene_id>b",
-            "narration_text": "<second half>",
-            "kling_duration": 5,
-            "trim_to": <estimate>,
-            "transition_in": "cross-dissolve 0.3s",
-            "image_prompt": "...",
-            "video_prompt": "..."
-          }}
-        ]
-      }},
-      "caption_text": "<from narration>"
-    }}
   ],
   "audio": {{
     "voice_over": {{
