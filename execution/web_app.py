@@ -751,6 +751,14 @@ def api_generate_narration():
             scenes, retry_repair_log = pb.repair_scenes(scenes)
             failures = pb.validate_scenes(scenes, duration, voice_id=voice_id)
 
+        # Hard ceiling breach after retry = reject outright
+        if failures and any("HARD CEILING" in f for f in failures):
+            return jsonify({
+                "error": "Script exceeds the hard duration ceiling even after retry. "
+                         "Please try a shorter duration or simpler topic.",
+                "validation_failures": failures,
+            }), 422
+
         return jsonify({
             "scenes": scenes,
             "niche": resolved_niche,

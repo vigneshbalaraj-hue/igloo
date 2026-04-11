@@ -290,8 +290,12 @@ def generate_narration(theme: str, topic: str, duration: int,
                     print(f"    - {entry}")
             failures = pb.validate_scenes(scenes, duration, voice_id=voice_id)
             if failures:
+                if any("HARD CEILING" in f for f in failures):
+                    print(f"  [validator] FATAL: hard ceiling exceeded after retry: {failures}")
+                    print("  Cannot produce a reel that exceeds the duration limit. Aborting.")
+                    sys.exit(1)
                 print(f"  [validator] WARNING: still failing after retry: {failures}")
-                print("  Continuing anyway — flag for manual review.")
+                print("  Continuing with warnings — flag for manual review.")
 
     while True:
         # Display scenes

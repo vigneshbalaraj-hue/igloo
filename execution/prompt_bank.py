@@ -40,6 +40,10 @@ DEFAULT_WPS = 2.5
 # Tight enough that PASS means PASS, loose enough to allow human variation.
 WPS_BAND = 0.15  # ±15% around target word count
 
+# Hard ceiling: no reel may exceed this 1x duration. At 1.2x final speed,
+# MAX_DURATION_1X = 60 produces a ≤50s delivered reel.
+MAX_DURATION_1X = 60
+
 # Built-in niches in prompt_bank.md (order matches Part 2 sections)
 BUILTIN_NICHES = ["spirituality", "fitness", "finance", "parenting", "wellness"]
 
@@ -326,7 +330,8 @@ def build_narration_prompt(
     brand_str = brand_notes or "none"
     cta_str = cta_target or "drive curiosity toward a deeper breakdown (not a hard sell)"
 
-    # Calibrated word-count target
+    # Calibrated word-count target (clamped to hard ceiling)
+    duration = min(duration, MAX_DURATION_1X)
     wps = get_voice_wps(voice_id)
     target_words = int(round(duration * wps))
     band = max(3, int(round(target_words * WPS_BAND)))
@@ -356,6 +361,13 @@ Write a {duration}-second reel script about: {topic}
 
 Follow every universal rule. Match the niche voice. Use the good example as a quality benchmark. Avoid every failure pattern shown in the bad example.
 
+SIMPLICITY (non-negotiable):
+- Keep narration conversational and breezy. Short sentences. Let the visuals breathe.
+- One concrete detail per reframe is enough — do not stack multiple studies, texts, or figures.
+- Pace the viewer can absorb on first watch. If a sentence needs re-reading, it is too complex.
+- Think "friend explaining over coffee" not "documentary narrator cramming facts."
+- Leave room for moments to land. Not every second needs words.
+
 Structure the script as a JSON array of ~9 scenes alternating "anchor" (direct-to-camera) and "b-roll" (cinematic footage). Start and end on anchor (odd scene count). Each scene object MUST have these exact fields — field names must match exactly, no typos:
 - scene_id (int, 1..N)
 - type ("anchor" or "b-roll")
@@ -366,7 +378,7 @@ Structure the script as a JSON array of ~9 scenes alternating "anchor" (direct-t
 
 BANNED in narration_text: the characters ! * ( ) ; AND ALL-CAPS shouting AND markdown emphasis like *word*.
 
-WORD COUNT: total narration across all scenes must be EXACTLY {target_words} words (acceptable range {min_words}-{max_words}). This voice speaks at {wps:.2f} words/second, so {target_words} words = {duration}s. Do NOT exceed {max_words} words — overshoot blows the duration target. Do NOT use a listicle structure. Do NOT use banned phrases from the niche voice. Do NOT hedge.
+WORD COUNT: total narration across all scenes must be EXACTLY {target_words} words (acceptable range {min_words}-{max_words}). This voice speaks at {wps:.2f} words/second, so {target_words} words = {duration}s. Do NOT exceed {max_words} words — HARD LIMIT. Shorter is better than longer. If in doubt, cut a detail. Overshoot = automatic rejection. Do NOT use a listicle structure. Do NOT use banned phrases from the niche voice. Do NOT hedge.
 
 Return ONLY the JSON array. No preamble, no markdown fences, no explanation.""", niche_label
 
@@ -646,6 +658,7 @@ def build_retry_prompt(base_prompt: str, failures: list[str], duration: int,
     invalid voice_emotion). This version restates every constraint that has
     historically drifted.
     """
+    duration = min(duration, MAX_DURATION_1X)
     wps = get_voice_wps(voice_id)
     target_words = int(round(duration * wps))
     band = max(3, int(round(target_words * WPS_BAND)))
@@ -682,8 +695,8 @@ COMPLETE new script (all scenes), not a diff.
 
 === WORD COUNT ===
   Total narration across all scenes: {target_words} words
-  Acceptable range: {min_words}-{max_words} words
-  (Calibrated for this voice at {wps:.2f} words/second × {duration}s.)
+  Acceptable range: {min_words}-{max_words} words (HARD CEILING — exceeding {max_words} = automatic rejection, no exceptions)
+  (Calibrated for this voice at {wps:.2f} words/second × {duration}s. Shorter is better.)
 
 === STRUCTURE ===
   - Start AND end on an "anchor" scene
@@ -702,6 +715,7 @@ def validate_scenes(scenes: list, duration: int,
     back to DEFAULT_WPS — caller should always pass it from .env.
     """
     failures: list[str] = []
+    duration = min(duration, MAX_DURATION_1X)
 
     if not isinstance(scenes, list) or not scenes:
         return ["Output is not a non-empty JSON array of scenes"]
@@ -733,6 +747,10 @@ def validate_scenes(scenes: list, duration: int,
         return failures
 
     # Structural checks
+    if len(scenes) < 5:
+        failures.append(
+            f"Too few scenes ({len(scenes)}) — minimum 5 for valid reel structure"
+        )
     types = [s["type"] for s in scenes]
     if types[0] != "anchor":
         failures.append(f"First scene must be anchor, got {types[0]!r}")
@@ -754,6 +772,16 @@ def validate_scenes(scenes: list, duration: int,
         failures.append(
             f"Word count {word_count} outside band {min_words}-{max_words} "
             f"(target {target_words} for {duration}s @ {wps:.2f} wps)"
+        )
+
+    # Hard ceiling — no script may exceed the absolute max regardless of
+    # requested duration. Prevents reels from ever exceeding 50s at 1.2x.
+    # No band tolerance here — this is the absolute wall.
+    hard_max = int(round(MAX_DURATION_1X * wps))
+    if word_count > hard_max:
+        failures.append(
+            f"HARD CEILING EXCEEDED: {word_count} words > absolute max "
+            f"{hard_max} (max {MAX_DURATION_1X}s @ {wps:.2f} wps)"
         )
 
     # AI-tell scan

@@ -96,9 +96,12 @@ Be pragmatic. Be reliable. Self-anneal.
 
 ## Current state (Igloo launch)
 
-**Latest checkpoint:** `.tmp/checkpoint_2026-04-10_session36.md` — start here. (Predecessors: s35, s34, s33, s32, s31.)
+**Latest checkpoint:** `.tmp/checkpoint_2026-04-11_session39.md` — start here. (Predecessors: s38, s37, s36, s35, s34, s33, s32, s31.)
 
-- **Session 35–36 — 2-tier credits system built, landing page merged, domains unified.** Built credits/bundle pricing (single $9.99/1 reel, double $14.99/2 reels). Merged Kaushik's landing PR #1 with CSS scoping fixes. Migrated all domains to igloo-gate. Fixed Clerk env vars + middleware video blocking.
+- **Session 39 — P0 Block B1.** 50s hard limit (at 1.2x) + simpler scripts. `MAX_DURATION_1X=60` in `prompt_bank.py`. Hard ceiling = `wps * 60` (114 words at 1.90 wps). Simplicity rules in prompt. Min 5 scenes. NOT yet deployed to Fly — deploy with C1. **C1 reprioritized next** (every b-roll scene exceeds 5s Kling cap). Gemini 503 outage confirmed B3 urgency. Next: C1 → B2 → B3.
+- **Session 38 — P0 Block A.** Full narration captions (was keyword-only). Reconnect-to-run verified working.
+- **Session 37 — Clerk production + /profile page.** Migrated Clerk to `pk_live_`/`sk_live_` keys, added 6 DNS records in Namecheap, set up Google OAuth via GCP. Built `/profile` page with credit balance, transaction log, reel history (30-day download expiry), payment history. Navbar updated.
+- **Session 35–36 — 2-tier credits system, landing page merged, domains unified.**
 - **Production domains (all serve igloo-gate):**
   - `igloo.video` → Vercel project `igloo-gate` (root dir: `app/`)
   - `www.igloo.video` → Vercel project `igloo-gate`
@@ -108,10 +111,11 @@ Be pragmatic. Be reliable. Self-anneal.
 - **Git auto-deploy active.** igloo-gate connected to `vigneshbalaraj-hue/igloo`, root dir `app/`. Push to main triggers deploy. **Never use `vercel --prod` CLI** — it skips large binary files.
 - **Razorpay is LIVE MODE and working.** Keys: `rzp_live_Sbg199N6mjjpuR`. International Cards enabled. Webhook: `https://app.igloo.video/api/razorpay/webhook`.
 - **2-tier pricing live.** Single (₹999, 1 credit) / Double (₹1,249, 2 credits). Shared constants in `app/src/lib/pricing.ts`. Credit redemption via Postgres `redeem_credit()` function. `/create` shows tier selector + credit balance.
-- **Landing page in Next.js app.** CSS scoped under `.landing-theme`. Old Vite `igloo` project is orphaned. Clerk middleware skips video extensions (`proxy.ts` matcher).
+- **Landing page in Next.js app.** CSS scoped under `.landing-theme`. Old Vite `igloo` project is orphaned (kept intentionally). Clerk middleware skips video extensions (`proxy.ts` matcher).
 - **Admin access:** Clerk public metadata `{ "role": "admin" }` + custom session token `{ "metadata": "{{user.public_metadata}}" }`. `/admin` shows running/queued/awaiting_review runs.
-- **Clerk keys are `pk_test_`/`sk_test_`** (Development instance, `rich-piranha-3`). Works fine, shows dev badge. Production Clerk migration deferred.
+- **Clerk is PRODUCTION.** `pk_live_`/`sk_live_` keys on Vercel. DNS records on Namecheap. Google OAuth via GCP (`clerk.igloo.video/v1/oauth_callback`). Session token template set in Clerk dashboard. Dev badge gone.
+- **`/profile` page live.** Credit balance + transaction log, reel history (30-day download expiry, client-side), payment history. API routes: `/api/runs`, `/api/payments`, `/api/credits/history`. Navbar has "Profile" link.
 - **Vercel env vars:** Never use `echo` to pipe values — always `printf` (no trailing newline).
 - **flyctl in bash:** `~/.fly/bin/flyctl.exe`. Deploy: `~/.fly/bin/flyctl.exe deploy` from repo root. **Never** `fly scale count 2`.
-- **Deferred:** Clerk production keys, CDN for landing assets (~21MB), profile/dashboard page, email on deliver, Razorpay refund API, `run_pipeline.py:251` CLI `--speed` fix, clean up old `igloo` Vercel project.
+- **Deferred:** CDN for landing assets (~21MB), Supabase Storage cleanup cron (30-day expiry), email on deliver, Razorpay refund API, `run_pipeline.py:251` CLI `--speed` fix.
 - **Stack:** Next 16 + React 19 + Tailwind 4 + Clerk 7. Use `./node_modules/.bin/tsc` not `npx tsc`.

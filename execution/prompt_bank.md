@@ -22,7 +22,7 @@ These rules are non-negotiable. Every script the LLM generates must satisfy all 
 | **No listicle structure** | Never "Here are 5 ways to..." or "First... Second... Third..." This is a story, not a blog post. |
 | **Imperfections are intentional** | A script that's too clean sounds AI-generated. Include deliberate rhythm breaks — an incomplete thought, a pause that lingers, a question that doesn't get answered immediately. |
 
-### Structure (40-60 seconds)
+### Structure (30-50 seconds, after 1.2x speedup)
 
 Every script follows this arc. No exceptions.
 
@@ -42,7 +42,7 @@ REFRAME (20-40 seconds)
   → This is the payload — the reason the reel exists.
   → Make it feel like a revelation, not a lecture.
 
-CTA (40-60 seconds)
+CTA (35-50 seconds)
   → Every reel drives to a next step. Always.
   → CTA must feel like a natural continuation, not a bolted-on sales pitch.
   → Pattern: [insight callback] + [action]. Example: "If that changed how you think about fasting, the full breakdown is in the link."
@@ -88,6 +88,13 @@ Before any script is finalized, verify:
 - [ ] Would someone disagree with at least one claim?
 - [ ] Does it avoid "In today's world," "Let's dive in," "Here's the thing," or any AI-tell opener?
 - [ ] Is the CTA woven into the narrative, not bolted on?
+
+### Simplicity Mandate
+
+- One strong specific reference per script is enough. Do not stack multiple studies, texts, or figures.
+- Breathing room matters. Not every second needs narration — let moments land.
+- If the script feels like it's trying to impress, it's too dense. If it feels like it's trying to connect, it's right.
+- The goal is a ≤50-second reel (after 1.2x speedup) that a viewer watches twice, not one that tries to be a 5-minute video crammed into 50 seconds.
 
 ---
 
