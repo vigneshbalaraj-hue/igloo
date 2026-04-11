@@ -3,12 +3,17 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   async redirects() {
     return [
-      // Bare domain → www so Clerk session cookies work
-      // (users sign in at app.igloo.video; igloo.video has no Clerk session)
+      // Consolidate all domains to igloo.video (the one canonical address)
       {
         source: "/:path*",
-        has: [{ type: "host", value: "igloo.video" }],
-        destination: "https://www.igloo.video/:path*",
+        has: [{ type: "host", value: "www.igloo.video" }],
+        destination: "https://igloo.video/:path*",
+        permanent: true,
+      },
+      {
+        source: "/:path*",
+        has: [{ type: "host", value: "app.igloo.video" }],
+        destination: "https://igloo.video/:path*",
         permanent: true,
       },
     ];

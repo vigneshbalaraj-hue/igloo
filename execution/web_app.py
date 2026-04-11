@@ -638,7 +638,7 @@ def index():
     elif IGLOO_DEV_MODE:
         _ensure_dev_session()
     elif not current_user_id():
-        return _render_token_error("This studio requires a valid access link from app.igloo.video."), 401
+        return _render_token_error("This studio requires a valid access link from igloo.video."), 401
 
     # Pre-fill topic from runs.prompt if available
     prefill_topic = ""
