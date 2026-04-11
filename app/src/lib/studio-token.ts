@@ -1,5 +1,5 @@
 // HMAC-signed token used to hand an authenticated+paid user off from
-// app.igloo.video to the Flask studio hosted on Modal.
+// igloo.video to the Flask studio hosted on Fly.io.
 //
 // Format: base64url(json(payload)).base64url(hmac_sha256(payload_b64))
 //

@@ -96,20 +96,20 @@ Be pragmatic. Be reliable. Self-anneal.
 
 ## Current state (Igloo launch)
 
-**Latest checkpoint:** `.tmp/checkpoint_2026-04-11_session39.md` — start here. (Predecessors: s38, s37, s36, s35, s34, s33, s32, s31.)
+**Latest checkpoint:** `.tmp/checkpoint_2026-04-11_session40.md` — start here. (Predecessors: s39, s38, s37, s36, s35, s34, s33, s32, s31.)
 
-- **Session 39 — P0 Block B1.** 50s hard limit (at 1.2x) + simpler scripts. `MAX_DURATION_1X=60` in `prompt_bank.py`. Hard ceiling = `wps * 60` (114 words at 1.90 wps). Simplicity rules in prompt. Min 5 scenes. NOT yet deployed to Fly — deploy with C1. **C1 reprioritized next** (every b-roll scene exceeds 5s Kling cap). Gemini 503 outage confirmed B3 urgency. Next: C1 → B2 → B3.
+- **Session 40 — B1+C1 deployed to Fly.** B1: 50s hard limit (at 1.2x), `MAX_DURATION_1X=60`, 114-word ceiling, min 5 scenes. C1: dynamic `kling_duration` 5/10 for b-roll based on `scene_duration` (set in `extract_word_timestamps.py`). Split-clips prompt removed. Kling v2-1 supports `"5"` or `"10"` only, 12 credits/s. Next: B3 (Gemini fallback) → B2.
 - **Session 38 — P0 Block A.** Full narration captions (was keyword-only). Reconnect-to-run verified working.
 - **Session 37 — Clerk production + /profile page.** Migrated Clerk to `pk_live_`/`sk_live_` keys, added 6 DNS records in Namecheap, set up Google OAuth via GCP. Built `/profile` page with credit balance, transaction log, reel history (30-day download expiry), payment history. Navbar updated.
 - **Session 35–36 — 2-tier credits system, landing page merged, domains unified.**
-- **Production domains (all serve igloo-gate):**
-  - `igloo.video` → Vercel project `igloo-gate` (root dir: `app/`)
-  - `www.igloo.video` → Vercel project `igloo-gate`
-  - `app.igloo.video` → Vercel project `igloo-gate`
+- **Production domains (consolidated to igloo.video):**
+  - `igloo.video` → Vercel project `igloo-gate` (root dir: `app/`) — **canonical, all traffic here**
+  - `www.igloo.video` → 308 redirect to `igloo.video` (via next.config.ts)
+  - `app.igloo.video` → 308 redirect to `igloo.video` (via next.config.ts)
   - Studio: `igloo-studio.fly.dev` → Fly `performance-2x` (2 dedicated vCPUs, 4gb)
-  - Fly `IGLOO_APP_URL` = `https://www.igloo.video`
+  - Fly `IGLOO_APP_URL` = `https://igloo.video`
 - **Git auto-deploy active.** igloo-gate connected to `vigneshbalaraj-hue/igloo`, root dir `app/`. Push to main triggers deploy. **Never use `vercel --prod` CLI** — it skips large binary files.
-- **Razorpay is LIVE MODE and working.** Keys: `rzp_live_Sbg199N6mjjpuR`. International Cards enabled. Webhook: `https://app.igloo.video/api/razorpay/webhook`.
+- **Razorpay is LIVE MODE and working.** Keys: `rzp_live_Sbg199N6mjjpuR`. International Cards enabled. Webhook: `https://igloo.video/api/razorpay/webhook`.
 - **2-tier pricing live.** Single (₹999, 1 credit) / Double (₹1,249, 2 credits). Shared constants in `app/src/lib/pricing.ts`. Credit redemption via Postgres `redeem_credit()` function. `/create` shows tier selector + credit balance.
 - **Landing page in Next.js app.** CSS scoped under `.landing-theme`. Old Vite `igloo` project is orphaned (kept intentionally). Clerk middleware skips video extensions (`proxy.ts` matcher).
 - **Admin access:** Clerk public metadata `{ "role": "admin" }` + custom session token `{ "metadata": "{{user.public_metadata}}" }`. `/admin` shows running/queued/awaiting_review runs.

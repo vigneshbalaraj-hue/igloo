@@ -13,12 +13,12 @@ A creator visits `igloo.video`, clicks "Create your first reel", pays the sticke
 ## The customer journey (canonical flow)
 
 ```
-1. Discover      → igloo.video (landing, React+Vite)
-2. Sign up       → app.igloo.video/sign-up (Clerk)
-3. Pay           → app.igloo.video/create → Razorpay (display $14.99, charged ~₹1,249 INR)
+1. Discover      → igloo.video (landing page)
+2. Sign up       → igloo.video/sign-up (Clerk)
+3. Pay           → igloo.video/create → Razorpay (display $14.99, charged ~₹1,249 INR)
 4. Create        → Flask studio on Fly.io (theme → narration → character → script)
 5. Render        → 9-step pipeline runs (capped at IGLOO_MAX_PIPELINES concurrent)
-6. Review        → Operator watches in app.igloo.video/admin
+6. Review        → Operator watches in igloo.video/admin
 7. Deliver       → Customer notified → downloads via signed Supabase URL
    OR Reject     → Credit refunded in ledger, customer notified, refund handled
 ```
@@ -33,13 +33,13 @@ The product is **three distinct applications** with clear responsibilities. Do n
 
 - **Stack:** React + Vite, deployed to Vercel at `igloo.video`
 - **Role:** Marketing site + policy pages (privacy, refund, pricing, contact — required by Razorpay)
-- **Owns:** brand, copy, CTAs pointing to `app.igloo.video/sign-up`
+- **Owns:** brand, copy, CTAs pointing to `igloo.video/sign-up`
 - **Does NOT own:** authentication, payment, the wizard, admin, anything stateful
 - **Touch only when:** copy/pricing/CTAs change, or policy pages need updates
 
 ### 2. Gate (`app/`) — the authenticated shell
 
-- **Stack:** Next.js 16 + React 19 + Tailwind 4 + Clerk 7, deployed to Vercel at `app.igloo.video`
+- **Stack:** Next.js 16 + React 19 + Tailwind 4 + Clerk 7, deployed to Vercel at `igloo.video`
 - **Role:** Authentication, payment collection, run status polling, admin review UI, delivery
 - **Owns:**
   - `/sign-in`, `/sign-up` — Clerk auth
@@ -118,7 +118,7 @@ These are intentionally missing today and should be deferred, not built ad-hoc:
 - **Razorpay refund API** (actual money-back, not just credit ledger). Pending Razorpay dashboard flow verification.
 - **30-customer waitlist** gating.
 - **Live Razorpay mode** (currently TEST).
-- **Custom domain + DNS** on `igloo.video` / `app.igloo.video`. Separate workstream from feature development.
+- **Custom domain + DNS** — consolidated to `igloo.video` (done s41). `www` and `app` subdomains redirect.
 
 ## Reference map
 

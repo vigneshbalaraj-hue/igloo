@@ -2,7 +2,7 @@
 Igloo Modal studio — hosts the Flask wizard + pipeline on Modal.
 
 Architecture:
-  Next.js (app.igloo.video) gates access with Clerk auth and Razorpay payment,
+  Next.js (igloo.video) gates access with Clerk auth and Razorpay payment,
   creates a runs row with status='draft', mints a signed HMAC token
   {run_id, user_id, exp} and redirects the browser to:
 
@@ -14,7 +14,7 @@ Architecture:
   character → script wizard. On "Create My Reel" it subprocesses the 9-step
   pipeline in a per-user workdir and, on success, uploads the final mp4 to
   Supabase Storage and flips the run to status='awaiting_review'. The browser
-  is redirected back to app.igloo.video/runs/<id> where the operator picks it
+  is redirected back to igloo.video/runs/<id> where the operator picks it
   up for QC review.
 
   Pipeline execution is capped at IGLOO_MAX_PIPELINES (default 3) concurrent
@@ -80,7 +80,7 @@ image = (
 #
 #   3. igloo-studio
 #        IGLOO_STUDIO_SECRET=<32 bytes base64, byte-identical to Next.js side>
-#        IGLOO_APP_URL=https://app.igloo.video
+#        IGLOO_APP_URL=https://igloo.video
 #        IGLOO_MAX_PIPELINES=3
 #
 # Modal injects secrets as env vars; web_app.load_env() reads os.environ first
