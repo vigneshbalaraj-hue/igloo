@@ -21,13 +21,12 @@ import json
 import os
 import re
 import sys
-import urllib.request
-import urllib.error
 from pathlib import Path
 
 # Local — shared with web_app.py so the prompt bank lives in one place
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import prompt_bank as pb  # noqa: E402
+from gemini_client import call_gemini, GeminiAPIError  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -59,64 +58,6 @@ def slugify(text: str) -> str:
     text = re.sub(r'[^a-z0-9\s-]', '', text)
     text = re.sub(r'[\s-]+', '_', text)
     return text.strip('_')
-
-
-def call_gemini(prompt: str, api_key: str, temperature: float = 0.5,
-                max_tokens: int = 8192, timeout: int = 60) -> str:
-    """Call Gemini 2.5 Flash and return the text response."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": temperature,
-            "maxOutputTokens": max_tokens,
-            "thinkingConfig": {"thinkingBudget": 0}
-        }
-    }
-
-    data = json.dumps(payload).encode()
-
-    # Retry on 429/5xx with exponential backoff. Gemini 2.5 Flash returns 503
-    # "high demand" transient errors fairly often; blocking once on this would
-    # fail production runs unnecessarily. Max ~90s total wait.
-    import time as _time
-    backoffs = [5, 10, 20, 40]
-    last_err = None
-    result = None
-    for attempt, wait_s in enumerate([0] + backoffs):
-        if wait_s:
-            print(f"  [gemini] Retry {attempt}/{len(backoffs)} after {wait_s}s "
-                  f"(last: {last_err})", file=sys.stderr)
-            _time.sleep(wait_s)
-        req = urllib.request.Request(url, data=data, method="POST")
-        req.add_header("Content-Type", "application/json")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                result = json.loads(resp.read().decode())
-            break
-        except urllib.error.HTTPError as e:
-            body = e.read().decode() if e.fp else ""
-            last_err = f"HTTP {e.code}"
-            # Retry on 429 (rate limit) and 5xx (server)
-            if e.code == 429 or 500 <= e.code < 600:
-                continue
-            print(f"ERROR: Gemini API returned {e.code}: {body}", file=sys.stderr)
-            sys.exit(1)
-        except urllib.error.URLError as e:
-            last_err = f"URLError: {e.reason}"
-            continue
-
-    if result is None:
-        print(f"ERROR: Gemini API failed after {len(backoffs) + 1} attempts: {last_err}",
-              file=sys.stderr)
-        sys.exit(1)
-
-    parts = result["candidates"][0]["content"]["parts"]
-    text = ""
-    for part in parts:
-        if "text" in part:
-            text = part["text"].strip()
-    return text
 
 
 def extract_json(text: str) -> str:
@@ -738,4 +679,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except GeminiAPIError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)

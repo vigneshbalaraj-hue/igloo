@@ -23,9 +23,10 @@ from __future__ import annotations
 import json
 import re
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from gemini_client import call_gemini as _call_gemini  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROMPT_BANK_PATH = Path(__file__).resolve().parent / "prompt_bank.md"
@@ -798,29 +799,3 @@ def validate_scenes(scenes: list, duration: int,
     return failures
 
 
-# ---------------------------------------------------------------------------
-# Internal: thin Gemini call (used only by dynamic niche generation).
-# Kept here so this module has no upstream dependency on generate_script.py.
-# ---------------------------------------------------------------------------
-
-def _call_gemini(prompt: str, api_key: str, temperature: float = 0.7,
-                 max_tokens: int = 4096, timeout: int = 60) -> str:
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.5-flash:generateContent?key={api_key}"
-    )
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": temperature,
-            "maxOutputTokens": max_tokens,
-            "thinkingConfig": {"thinkingBudget": 0},
-        },
-    }
-    req = urllib.request.Request(
-        url, data=json.dumps(payload).encode(), method="POST"
-    )
-    req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        result = json.loads(resp.read().decode())
-    return result["candidates"][0]["content"]["parts"][0]["text"]

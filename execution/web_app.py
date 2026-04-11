@@ -35,8 +35,6 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.request
-import urllib.error
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
@@ -48,6 +46,7 @@ from flask import (
 # Local — shared with generate_script.py
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import prompt_bank as pb  # noqa: E402
+from gemini_client import call_gemini  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -382,6 +381,21 @@ def mark_run_failed(run_id: str, reason: str, qc_notes: str | None = None):
     except Exception:
         pass
 
+    # Auto-refund: give the customer their credit back on pipeline failure.
+    try:
+        row = sb.table("runs").select("user_id") \
+            .eq("id", run_id).single().execute().data
+        if row and row.get("user_id"):
+            sb.table("credits").insert({
+                "user_id": row["user_id"],
+                "delta": 1,
+                "reason": "refund",
+                "run_id": run_id,
+                "note": f"auto-refund: {reason[:200]}",
+            }).execute()
+    except Exception:
+        pass
+
 
 def fetch_run_prompt(run_id: str) -> str | None:
     """Pre-fill the wizard's topic field from the runs.prompt set at payment time."""
@@ -416,48 +430,6 @@ def load_env(key: str) -> str | None:
                 if v and not v.startswith("<"):
                     return v
     return None
-
-
-def call_gemini(prompt: str, api_key: str, temperature: float = 0.5,
-                max_tokens: int = 8192, timeout: int = 90) -> str:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": temperature,
-            "maxOutputTokens": max_tokens,
-            "thinkingConfig": {"thinkingBudget": 0}
-        }
-    }
-    data = json.dumps(payload).encode()
-
-    # Gemini 2.5-flash periodically returns 503 (model overloaded) and 429
-    # (rate limit). Overload windows commonly last 30-60s, so retry with
-    # exponential backoff: 2s, 4s, 8s, 16s, 32s = ~62s total budget across
-    # 6 attempts. Holding a gunicorn thread that long is fine given threads=16
-    # and IGLOO_MAX_PIPELINES=3.
-    last_err: Exception | None = None
-    for attempt in range(6):
-        try:
-            req = urllib.request.Request(url, data=data, method="POST")
-            req.add_header("Content-Type", "application/json")
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                result = json.loads(resp.read().decode())
-                break
-        except urllib.error.HTTPError as e:
-            last_err = e
-            if e.code in (429, 500, 502, 503, 504) and attempt < 5:
-                time.sleep(2 ** (attempt + 1))
-                continue
-            raise
-    else:
-        raise last_err if last_err else RuntimeError("call_gemini exhausted retries")
-    parts = result["candidates"][0]["content"]["parts"]
-    text = ""
-    for part in parts:
-        if "text" in part:
-            text = part["text"].strip()
-    return text
 
 
 def extract_json_from_text(text: str):
