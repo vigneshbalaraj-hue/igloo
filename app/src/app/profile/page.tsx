@@ -91,6 +91,7 @@ export default function ProfilePage() {
   const [history, setHistory] = useState<CreditEntry[]>([]);
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [feedbackRunIds, setFeedbackRunIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [showHistory, setShowHistory] = useState(false);
 
@@ -106,12 +107,14 @@ export default function ProfilePage() {
       fetch("/api/credits/history").then((r) => r.json()),
       fetch("/api/runs").then((r) => r.json()),
       fetch("/api/payments").then((r) => r.json()),
+      fetch("/api/runs/feedback-status").then((r) => r.json()),
     ])
-      .then(([balData, histData, runsData, payData]) => {
+      .then(([balData, histData, runsData, payData, fbData]) => {
         setBalance(balData.balance ?? 0);
         setHistory(histData.history ?? []);
         setRuns(runsData.runs ?? []);
         setPayments(payData.payments ?? []);
+        setFeedbackRunIds(new Set(fbData.runIds ?? []));
       })
       .catch(() => {
         setBalance(0);
@@ -238,6 +241,11 @@ export default function ProfilePage() {
                         >
                           {STATUS_LABELS[run.status]}
                         </span>
+                        {feedbackRunIds.has(run.id) && (
+                          <span className="inline-block rounded-full px-2.5 py-0.5 text-xs font-medium bg-yellow-900 text-yellow-300">
+                            Feedback given
+                          </span>
+                        )}
                         <span className="text-xs text-neutral-500">
                           {formatDate(run.created_at)}
                         </span>

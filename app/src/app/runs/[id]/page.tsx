@@ -3,6 +3,7 @@
 import { use, useEffect, useState } from "react";
 import { useAuth } from "@clerk/nextjs";
 import { createBrowserSupabase } from "@/lib/supabase";
+import FeedbackForm from "./feedback-form";
 
 type Run = {
   id: string;
@@ -147,6 +148,12 @@ export default function RunPage({
               >
                 Download your reel
               </a>
+            )}
+
+            {run.status === "delivered" && (
+              <div className="mt-6">
+                <FeedbackForm runId={run.id} />
+              </div>
             )}
 
             {run.status === "draft" && (
