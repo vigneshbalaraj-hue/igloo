@@ -516,7 +516,9 @@ For each character option, provide a JSON object with:
 - "option": integer (1, 2, or 3)
 - "description": Detailed description (ethnicity, age, clothing, setting)
 - "image_prompt": Photorealistic Imagen prompt with camera specs (e.g., "shot on Sony A7IV, 50mm f/1.8, shallow depth of field"), lighting. NO abstract emotional cues.
-- "voice": object with "gender", "accent", "tone"
+- "voice": object with "gender" (must be "male" or "female"), "accent", "tone"
+
+CRITICAL: voice.gender MUST match the visual gender of the person described in image_prompt. If image_prompt describes a woman/female, voice.gender MUST be "female". If image_prompt describes a man/male, voice.gender MUST be "male". Never mismatch.
 
 Make characters diverse and authentic to the content.
 Return ONLY a JSON array of 3 objects. No explanation."""
@@ -530,7 +532,9 @@ REEL TOPIC: {topic}
 Return JSON with:
 - "description": expanded detailed description
 - "image_prompt": photorealistic Imagen prompt with camera specs, lighting. NO abstract cues.
-- "voice": object with "gender", "accent", "tone"
+- "voice": object with "gender" (must be "male" or "female"), "accent", "tone"
+
+CRITICAL: voice.gender MUST match the visual gender of the person described in image_prompt. If image_prompt describes a woman/female, voice.gender MUST be "female". If image_prompt describes a man/male, voice.gender MUST be "male". Never mismatch.
 
 Return ONLY the JSON object. No explanation."""
 

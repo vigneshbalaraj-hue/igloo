@@ -97,11 +97,31 @@ def download_file(url: str, dest: Path):
 # Pass 1: Search shared voice library
 # ---------------------------------------------------------------------------
 
+def _infer_gender_from_text(text: str) -> str | None:
+    """Infer gender from descriptive text using keyword matching.
+    Returns 'female', 'male', or None if ambiguous."""
+    t = text.lower()
+    female_markers = ["woman", "female", "lady", "girl", "mother", "mom",
+                      "grandmother", "she ", "her ", "actress", "businesswoman",
+                      "spokeswoman", " her,", "elderly woman", "young woman"]
+    male_markers = ["man ", " man,", "male", "gentleman", "boy", "father",
+                    "dad", "grandfather", "he ", "his ", "actor", "businessman",
+                    "spokesman", "elderly man", "young man"]
+    f_count = sum(1 for m in female_markers if m in t)
+    m_count = sum(1 for m in male_markers if m in t)
+    if f_count > m_count:
+        return "female"
+    if m_count > f_count:
+        return "male"
+    return None
+
+
 def build_voice_profile(script: dict) -> dict:
     """Extract a structured voice profile from the script JSON."""
     anchor = script.get("anchor_character", {})
     voice_block = anchor.get("voice", {})
     description = anchor.get("description", "")
+    image_prompt = anchor.get("image_prompt", "")
 
     profile = {
         "gender": voice_block.get("gender", ""),
@@ -109,6 +129,22 @@ def build_voice_profile(script: dict) -> dict:
         "tone": voice_block.get("tone", ""),
         "character_description": description,
     }
+
+    # Cross-check: if image_prompt gender disagrees with voice.gender, fix it
+    voice_gender = profile["gender"].lower()
+    visual_gender = _infer_gender_from_text(image_prompt) or _infer_gender_from_text(description)
+    if visual_gender and voice_gender:
+        voice_is_female = "female" in voice_gender or "woman" in voice_gender
+        voice_is_male = ("male" in voice_gender or "man" in voice_gender) and not voice_is_female
+        if visual_gender == "female" and voice_is_male:
+            print(f"  [voice] Gender mismatch: image_prompt implies female but voice.gender='{profile['gender']}' — correcting to 'female'", file=sys.stderr)
+            profile["gender"] = "female"
+        elif visual_gender == "male" and voice_is_female:
+            print(f"  [voice] Gender mismatch: image_prompt implies male but voice.gender='{profile['gender']}' — correcting to 'male'", file=sys.stderr)
+            profile["gender"] = "male"
+    elif visual_gender and not voice_gender:
+        print(f"  [voice] No voice.gender set, inferring '{visual_gender}' from image_prompt", file=sys.stderr)
+        profile["gender"] = visual_gender
 
     # Map to ElevenLabs API filter values
     gender_raw = profile["gender"].lower()
