@@ -96,9 +96,10 @@ Be pragmatic. Be reliable. Self-anneal.
 
 ## Current state (Igloo launch)
 
-**Latest checkpoint:** `.tmp/checkpoint_2026-04-11_session40.md` — start here. (Predecessors: s39, s38, s37, s36, s35, s34, s33, s32, s31.)
+**Latest checkpoint:** `.tmp/checkpoint_2026-04-11_session41.md` — start here. (Predecessors: s40, s39, s38, s37, s36, s35, s34, s33, s32, s31.)
 
-- **Session 40 — B1+C1 deployed to Fly.** B1: 50s hard limit (at 1.2x), `MAX_DURATION_1X=60`, 114-word ceiling, min 5 scenes. C1: dynamic `kling_duration` 5/10 for b-roll based on `scene_duration` (set in `extract_word_timestamps.py`). Split-clips prompt removed. Kling v2-1 supports `"5"` or `"10"` only, 12 credits/s. Next: B3 (Gemini fallback) → B2.
+- **Session 41 — B3 Gemini fallback + domain consolidation.** Unified `call_gemini` into `execution/gemini_client.py` (flash 6 retries → pro 3 retries). Auto-refund credit on pipeline failure. Consolidated all domains to `igloo.video` (www/app redirect). Razorpay webhook updated. Next: B2 (voice gender).
+- **Session 40 — B1+C1 deployed to Fly.** B1: 50s hard limit (at 1.2x), `MAX_DURATION_1X=60`, 114-word ceiling, min 5 scenes. C1: dynamic `kling_duration` 5/10 for b-roll based on `scene_duration` (set in `extract_word_timestamps.py`). Split-clips prompt removed. Kling v2-1 supports `"5"` or `"10"` only, 12 credits/s.
 - **Session 38 — P0 Block A.** Full narration captions (was keyword-only). Reconnect-to-run verified working.
 - **Session 37 — Clerk production + /profile page.** Migrated Clerk to `pk_live_`/`sk_live_` keys, added 6 DNS records in Namecheap, set up Google OAuth via GCP. Built `/profile` page with credit balance, transaction log, reel history (30-day download expiry), payment history. Navbar updated.
 - **Session 35–36 — 2-tier credits system, landing page merged, domains unified.**
