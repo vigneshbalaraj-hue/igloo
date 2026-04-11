@@ -11,20 +11,23 @@ const reels = [
   "/reels/hanuman-lanka.mp4",
   "/reels/spiritual-growth.mp4",
   "/reels/igloo-promo.mp4",
+  "/reels/dutch-dyke.mp4",
+  "/reels/index-funds.mp4",
+  "/reels/kedarnath.mp4",
+  "/reels/penguin-global-warming.mp4",
 ];
 
-// Interleaved pattern: same video repeats only after 3 others.
-// Pattern [0,1,2,3,0,1,2,3] maintains 4-gap rule even across the loop seam.
-// Staggered offsets so same-source copies don't show identical frames.
+// 8 unique reels — each appears once per track copy.
+// fullTrack duplication (below) handles the seamless CSS loop.
 const trackItems = [
   { src: reels[0], offset: 0 },
   { src: reels[1], offset: 0 },
   { src: reels[2], offset: 0 },
   { src: reels[3], offset: 0 },
-  { src: reels[0], offset: 15 },
-  { src: reels[1], offset: 20 },
-  { src: reels[2], offset: 18 },
-  { src: reels[3], offset: 25 },
+  { src: reels[4], offset: 0 },
+  { src: reels[5], offset: 0 },
+  { src: reels[6], offset: 0 },
+  { src: reels[7], offset: 0 },
 ];
 
 // Duplicate for seamless infinite CSS loop (translateX -50%)
