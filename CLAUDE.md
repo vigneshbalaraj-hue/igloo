@@ -96,9 +96,10 @@ Be pragmatic. Be reliable. Self-anneal.
 
 ## Current state (Igloo launch)
 
-**Latest checkpoint:** `.tmp/checkpoint_2026-04-11_session41.md` — start here. (Predecessors: s40, s39, s38, s37, s36, s35, s34, s33, s32, s31.)
+**Latest checkpoint:** `.tmp/checkpoint_2026-04-11_session42.md` — start here. (Predecessors: s41, s40, s39, s38, s37, s36, s35, s34, s33, s32, s31.)
 
-- **Session 41 — B3 Gemini fallback + domain consolidation.** Unified `call_gemini` into `execution/gemini_client.py` (flash 6 retries → pro 3 retries). Auto-refund credit on pipeline failure. Consolidated all domains to `igloo.video` (www/app redirect). Razorpay webhook updated. Next: B2 (voice gender).
+- **Session 42 — B2 + D2 + beta cap.** B2: voice gender mismatch fix (prompt tightening + runtime cross-check in `select_voice.py`). D2: post-reel feedback (`run_feedback` table, 5-star form on `/runs/[id]`, badge on `/profile`, `/admin/feedback`). Beta cap: 30-customer limit on `/create`, waitlisted users see "Beta is full", `/admin/waitlist` page. Migration 0006 deployed.
+- **Session 41 — B3 Gemini fallback + domain consolidation.** Unified `call_gemini` into `execution/gemini_client.py` (flash 6 retries → pro 3 retries). Auto-refund credit on pipeline failure. Consolidated all domains to `igloo.video` (www/app redirect). Razorpay webhook updated.
 - **Session 40 — B1+C1 deployed to Fly.** B1: 50s hard limit (at 1.2x), `MAX_DURATION_1X=60`, 114-word ceiling, min 5 scenes. C1: dynamic `kling_duration` 5/10 for b-roll based on `scene_duration` (set in `extract_word_timestamps.py`). Split-clips prompt removed. Kling v2-1 supports `"5"` or `"10"` only, 12 credits/s.
 - **Session 38 — P0 Block A.** Full narration captions (was keyword-only). Reconnect-to-run verified working.
 - **Session 37 — Clerk production + /profile page.** Migrated Clerk to `pk_live_`/`sk_live_` keys, added 6 DNS records in Namecheap, set up Google OAuth via GCP. Built `/profile` page with credit balance, transaction log, reel history (30-day download expiry), payment history. Navbar updated.
@@ -113,7 +114,8 @@ Be pragmatic. Be reliable. Self-anneal.
 - **Razorpay is LIVE MODE and working.** Keys: `rzp_live_Sbg199N6mjjpuR`. International Cards enabled. Webhook: `https://igloo.video/api/razorpay/webhook`.
 - **2-tier pricing live.** Single (₹999, 1 credit) / Double (₹1,249, 2 credits). Shared constants in `app/src/lib/pricing.ts`. Credit redemption via Postgres `redeem_credit()` function. `/create` shows tier selector + credit balance.
 - **Landing page in Next.js app.** CSS scoped under `.landing-theme`. Old Vite `igloo` project is orphaned (kept intentionally). Clerk middleware skips video extensions (`proxy.ts` matcher).
-- **Admin access:** Clerk public metadata `{ "role": "admin" }` + custom session token `{ "metadata": "{{user.public_metadata}}" }`. `/admin` shows running/queued/awaiting_review runs.
+- **Admin access:** Clerk public metadata `{ "role": "admin" }` + custom session token `{ "metadata": "{{user.public_metadata}}" }`. `/admin` shows running/queued/awaiting_review runs. `/admin/feedback` shows customer ratings. `/admin/waitlist` shows users with no payments.
+- **Beta cap:** 30 paying customers, then `/create` shows waitlist message. Existing customers bypass cap. Constant `BETA_CAP=30` in `app/src/app/api/beta-status/route.ts`.
 - **Clerk is PRODUCTION.** `pk_live_`/`sk_live_` keys on Vercel. DNS records on Namecheap. Google OAuth via GCP (`clerk.igloo.video/v1/oauth_callback`). Session token template set in Clerk dashboard. Dev badge gone.
 - **`/profile` page live.** Credit balance + transaction log, reel history (30-day download expiry, client-side), payment history. API routes: `/api/runs`, `/api/payments`, `/api/credits/history`. Navbar has "Profile" link.
 - **Vercel env vars:** Never use `echo` to pipe values — always `printf` (no trailing newline).
