@@ -233,7 +233,9 @@ export default function CreatePage() {
           Tell us what it&apos;s about. We handle the rest.
         </p>
 
-        <label className="block text-sm font-medium mb-2">Topic</label>
+        <label className="block text-sm font-medium mb-2">
+          {tier === "double" ? "Topic for your first reel" : "Topic"}
+        </label>
         <textarea
           value={topic}
           onChange={(e) => setTopic(e.target.value)}

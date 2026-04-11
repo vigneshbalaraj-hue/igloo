@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useEffect, useState } from "react";
+import Link from "next/link";
 import { useAuth } from "@clerk/nextjs";
 import { createBrowserSupabase } from "@/lib/supabase";
 import FeedbackForm from "./feedback-form";
@@ -103,6 +104,12 @@ export default function RunPage({
   return (
     <main className="flex-1 flex flex-col items-center justify-center px-6 py-16">
       <div className="w-full max-w-xl">
+        <Link
+          href="/profile"
+          className="text-sm text-neutral-400 hover:text-neutral-200 mb-4 inline-block"
+        >
+          ← Back to profile
+        </Link>
         <h1 className="text-2xl font-semibold tracking-tight mb-1">
           Your reel
         </h1>

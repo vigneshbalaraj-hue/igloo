@@ -281,7 +281,7 @@
     .stepper-dot.active + .stepper-label,
     .stepper-step:has(.stepper-dot.active) .stepper-label { color: var(--accent-light); }
     .stepper-line {
-      width: 60px; height: 2px;
+      width: 48px; height: 2px;
       background: var(--border-subtle);
       margin: 0 4px;
       margin-bottom: 20px;
@@ -445,6 +445,27 @@
     .char-label { font-size: 13px; font-weight: 600; color: var(--accent-light); margin-bottom: 8px; }
     .char-desc { font-size: 14px; line-height: 1.6; color: var(--text); font-weight: 300; }
     .char-voice { font-size: 12px; color: var(--text-muted); margin-top: 8px; font-weight: 400; }
+
+    /* ─── Voice Options ─── */
+    .voice-option {
+      padding: 20px;
+      background: var(--surface);
+      border: 2px solid var(--border-subtle);
+      border-radius: 12px;
+      margin-bottom: 12px;
+      cursor: pointer;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .voice-option:hover { border-color: var(--accent); background: var(--surface-raised); }
+    .voice-option.selected {
+      border-color: var(--accent);
+      background: var(--accent-glow);
+      box-shadow: 0 0 24px var(--accent-glow);
+    }
+    .voice-name { font-size: 15px; font-weight: 600; color: var(--accent-light); margin-bottom: 4px; }
+    .voice-labels { font-size: 12px; color: var(--text-muted); font-weight: 400; }
+    .voice-desc { font-size: 13px; color: var(--text); margin-top: 6px; line-height: 1.5; font-weight: 300; }
+    .voice-option audio { width: 100%; margin-top: 10px; height: 36px; border-radius: 8px; }
 
     /* ─── Assembly Summary ─── */
     .summary-row {
@@ -657,7 +678,7 @@
       .header h1 { font-size: 26px; }
       .field-row, .field-row-3 { grid-template-columns: 1fr; }
       .summary-row { grid-template-columns: 1fr 1fr; }
-      .stepper-line { width: 32px; }
+      .stepper-line { width: 20px; }
       .phase-text { font-size: 22px; }
       .btn-group { flex-direction: column; }
       .btn-group .btn { width: 100%; }
@@ -705,6 +726,11 @@
         <div class="stepper-line" id="line-3"></div>
         <div class="stepper-step">
           <div class="stepper-dot" id="dot-4">4</div>
+          <div class="stepper-label">Voice</div>
+        </div>
+        <div class="stepper-line" id="line-4"></div>
+        <div class="stepper-step">
+          <div class="stepper-dot" id="dot-5">5</div>
           <div class="stepper-label">Finalize</div>
         </div>
       </div>
@@ -724,7 +750,7 @@
           </div>
         </div>
         <div class="field" style="max-width:200px">
-          <label>Target Duration (seconds)</label>
+          <label>Target Duration (max 60s)</label>
           <input type="number" id="inp-duration" value="40" min="20" max="60">
         </div>
         <div class="field">
@@ -773,22 +799,35 @@
         </div>
       </div>
 
-      <!-- Step 4: Finalize -->
+      <!-- Step 4: Voice Preview -->
       <div id="step-4" class="step-panel hidden">
+        <div class="panel-title">Preview the anchor voice</div>
+        <div class="panel-subtitle">Listen to voice samples matched to your character. Pick the one that fits.</div>
+        <div id="voice-loading" class="loading-state hidden"><span class="spinner"></span> Finding voice matches...</div>
+        <div id="voice-candidates"></div>
+        <div class="btn-group">
+          <button class="btn btn-primary" id="btn-approve-voice" onclick="approveVoice()" disabled>Approve Voice</button>
+          <button class="btn btn-ghost" onclick="searchVoices()">Try Again</button>
+          <button class="btn btn-ghost btn-sm" onclick="goBack(3)">Back</button>
+        </div>
+      </div>
+
+      <!-- Step 5: Finalize -->
+      <div id="step-5" class="step-panel hidden">
         <div class="panel-title">Final review</div>
         <div class="panel-subtitle">Everything look good? Hit create and we'll build your reel.</div>
-        <div id="assembly-loading" class="loading-state hidden"><span class="spinner"></span> Assembling full script...</div>
+        <div id="assembly-loading" class="loading-state hidden"><span class="spinner"></span> Putting your script together — hang tight...</div>
         <div id="assembly-summary"></div>
         <div id="assembly-scenes"></div>
         <div class="field" style="margin-top:16px">
           <label>Edit instructions</label>
-          <textarea id="inp-edit-assembly" rows="2" placeholder="e.g., Change scene 4 video prompt to show a forest instead..."></textarea>
+          <textarea id="inp-edit-assembly" rows="2" placeholder="e.g., Make scene 3 about a sunset on a beach instead..."></textarea>
         </div>
         <div class="btn-group">
           <button class="btn btn-primary" onclick="createReel()" id="btn-create-reel">Create My Reel</button>
           <button class="btn btn-ghost" onclick="editAssembly()">Apply Edits</button>
           <button class="btn btn-ghost btn-sm" onclick="regenerateAssembly()">Regenerate</button>
-          <button class="btn btn-ghost btn-sm" onclick="goBack(3)">Back</button>
+          <button class="btn btn-ghost btn-sm" onclick="goBack(4)">Back</button>
         </div>
       </div>
     </div>
@@ -878,7 +917,7 @@
 
     // ═══════════════ STEPPER ═══════════════
     function updateStepper(active) {
-      for (let i = 1; i <= 4; i++) {
+      for (let i = 1; i <= 5; i++) {
         const dot = document.getElementById(`dot-${i}`);
         const line = document.getElementById(`line-${i}`);
         dot.className = 'stepper-dot';
@@ -892,7 +931,7 @@
     }
 
     function showStep(n) {
-      for (let i = 1; i <= 4; i++)
+      for (let i = 1; i <= 5; i++)
         document.getElementById(`step-${i}`).classList.add('hidden');
       document.getElementById(`step-${n}`).classList.remove('hidden');
       updateStepper(n);
@@ -1056,10 +1095,63 @@
       await generateCharacters();
     }
 
-    // ═══════════════ STEP 3 → 4: ASSEMBLY ═══════════════
+    // ═══════════════ STEP 3 → 4: VOICE PREVIEW ═══════════════
     async function approveCharacter() {
       if (!state.selectedCharacter) return;
       showStep(4);
+      await searchVoices();
+    }
+
+    async function searchVoices() {
+      const loading = document.getElementById('voice-loading');
+      const container = document.getElementById('voice-candidates');
+      loading.classList.remove('hidden');
+      container.innerHTML = '';
+      document.getElementById('btn-approve-voice').disabled = true;
+      state.selectedVoiceId = null;
+      try {
+        const data = await apiPost('/api/select-voice', {
+          character: state.selectedCharacter
+        });
+        state.voiceCandidates = data.candidates || [];
+        if (state.voiceCandidates.length === 0) {
+          container.innerHTML = '<div class="empty-state">No voice matches found. Try again or go back and adjust the character.</div>';
+          return;
+        }
+        container.innerHTML = state.voiceCandidates.map((v, i) => {
+          const labels = v.labels || {};
+          const tagParts = [labels.gender, labels.accent, labels.age].filter(Boolean);
+          const tagLine = tagParts.join(' / ');
+          const desc = (v.description || '').slice(0, 120);
+          return `<div class="voice-option" id="voice-${i}" onclick="selectVoice(${i})">
+            <div class="voice-name">${v.name || 'Voice ' + (i+1)}</div>
+            <div class="voice-labels">${tagLine}</div>
+            ${desc ? `<div class="voice-desc">${desc}</div>` : ''}
+            <audio controls preload="none" src="${v.preview_url}"></audio>
+          </div>`;
+        }).join('');
+      } catch (e) {
+        container.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
+      } finally {
+        loading.classList.add('hidden');
+      }
+    }
+
+    function selectVoice(i) {
+      const v = state.voiceCandidates[i];
+      if (!v) return;
+      state.selectedVoiceId = v.voice_id;
+      document.querySelectorAll('.voice-option').forEach(el => el.classList.remove('selected'));
+      document.getElementById(`voice-${i}`).classList.add('selected');
+      document.getElementById('btn-approve-voice').disabled = false;
+    }
+
+    async function approveVoice() {
+      if (!state.selectedVoiceId) return;
+      // Write voice_id into the character so it ends up in the assembled script
+      if (!state.selectedCharacter.voice) state.selectedCharacter.voice = {};
+      state.selectedCharacter.voice.elevenlabs_voice_id = state.selectedVoiceId;
+      showStep(5);
       await assembleScript();
     }
 
@@ -1152,12 +1244,13 @@
         state.savedPath = saveData.path;
 
         // Kick off the pipeline (may come back queued).
+        // start_from: 2 — voice was already selected in the wizard (step 4).
         const launchResp = await apiPost('/api/pipeline/start', {
           script_path: saveData.path,
           speed: 1.3,
           audio_mode: 'option-c',
           no_captions: false,
-          start_from: 1,
+          start_from: 2,
           auto_go: true,
           music_volume: 0.10,
           voice_volume: 1.5,

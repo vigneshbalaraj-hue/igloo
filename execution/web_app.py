@@ -47,6 +47,7 @@ from flask import (
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import prompt_bank as pb  # noqa: E402
 from gemini_client import call_gemini  # noqa: E402
+from select_voice import build_voice_profile, search_shared_voices, rank_with_gemini  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -247,12 +248,12 @@ def supabase_client():
 # ---------------------------------------------------------------------------
 
 def _sweep_orphan_queued():
-    """Fail queued runs older than 30 minutes (abandoned tabs). Cheap, race-safe."""
+    """Fail queued runs older than 4 hours (orphaned after Fly restart). Cheap, race-safe."""
     sb = supabase_client()
     if sb is None:
         return
     try:
-        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
         sb.table("runs").update({
             "status": "failed",
             "rejection_reason": "queue_timeout",
@@ -515,7 +516,7 @@ SCRIPT NARRATION:
 For each character option, provide a JSON object with:
 - "option": integer (1, 2, or 3)
 - "description": Detailed description (ethnicity, age, clothing, setting)
-- "image_prompt": Photorealistic Imagen prompt with camera specs (e.g., "shot on Sony A7IV, 50mm f/1.8, shallow depth of field"), lighting. NO abstract emotional cues.
+- "image_prompt": Photorealistic Imagen prompt with camera specs (e.g., "shot on Sony A7IV, 50mm f/1.8, shallow depth of field"), lighting. MUST include "looking directly at camera, direct eye contact". NO abstract emotional cues.
 - "voice": object with "gender" (must be "male" or "female"), "accent", "tone"
 
 CRITICAL: voice.gender MUST match the visual gender of the person described in image_prompt. If image_prompt describes a woman/female, voice.gender MUST be "female". If image_prompt describes a man/male, voice.gender MUST be "male". Never mismatch.
@@ -531,7 +532,7 @@ REEL TOPIC: {topic}
 
 Return JSON with:
 - "description": expanded detailed description
-- "image_prompt": photorealistic Imagen prompt with camera specs, lighting. NO abstract cues.
+- "image_prompt": photorealistic Imagen prompt with camera specs, lighting. MUST include "looking directly at camera, direct eye contact". NO abstract cues.
 - "voice": object with "gender" (must be "male" or "female"), "accent", "tone"
 
 CRITICAL: voice.gender MUST match the visual gender of the person described in image_prompt. If image_prompt describes a woman/female, voice.gender MUST be "female". If image_prompt describes a man/male, voice.gender MUST be "male". Never mismatch.
@@ -601,6 +602,7 @@ Structure:
 
 Do NOT include narration_start/end, scene_duration, audio_slice, actual_duration_seconds, or elevenlabs_voice_id.
 Image prompts: photorealistic, concrete, camera specs. NO abstract emotional cues.
+Anchor image_prompt MUST include "looking directly at camera, direct eye contact" — the anchor is speaking to the viewer.
 Anchor video prompts: minimal to not override lip-sync.
 
 Return ONLY the JSON object. No explanation."""
@@ -720,7 +722,7 @@ def api_generate_narration():
                 duration=duration,
                 voice_id=voice_id,
             )
-            raw = call_gemini(retry_prompt, api_key, temperature=0.9)
+            raw = call_gemini(retry_prompt, api_key, temperature=0.5)
             scenes = extract_json_from_text(raw)
             scenes, retry_repair_log = pb.repair_scenes(scenes)
             failures = pb.validate_scenes(scenes, duration, voice_id=voice_id)
@@ -810,6 +812,49 @@ def api_custom_character():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/select-voice", methods=["POST"])
+@require_auth
+def api_select_voice():
+    data = request.json
+    character = data.get("character", {})
+
+    elevenlabs_key = load_env("ELEVENLABS_API_KEY")
+    gemini_key = load_env("GEMINI_API_KEY")
+    if not elevenlabs_key:
+        return jsonify({"error": "ELEVENLABS_API_KEY not set"}), 500
+    if not gemini_key:
+        return jsonify({"error": "GEMINI_API_KEY not set"}), 500
+
+    # Build a mock script structure that build_voice_profile expects
+    mock_script = {"anchor_character": character}
+    try:
+        profile = build_voice_profile(mock_script)
+        voices = search_shared_voices(elevenlabs_key, profile)
+        if not voices:
+            return jsonify({"candidates": [], "profile": profile})
+
+        # Build candidate dicts for Gemini ranking (same shape download_previews returns)
+        candidates = []
+        for v in voices:
+            if not v.get("preview_url"):
+                continue
+            candidates.append({
+                "voice_id": v["voice_id"],
+                "name": v.get("name", ""),
+                "description": v.get("description", ""),
+                "category": v.get("category", ""),
+                "labels": v.get("labels", {}),
+                "preview_url": v["preview_url"],
+                "cloned_by_count": v.get("cloned_by_count", 0),
+                "liked_by_count": v.get("liked_by_count", 0),
+            })
+
+        ranked = rank_with_gemini(candidates, profile, gemini_key, top_n=3)
+        return jsonify({"candidates": ranked, "profile": profile})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/assemble-script", methods=["POST"])
 @require_auth
 def api_assemble_script():
@@ -853,6 +898,13 @@ def api_save_script():
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(script_json, f, indent=2, ensure_ascii=False)
+
+    # If voice was pre-selected in the wizard, propagate to env so
+    # generate_voiceover.py picks it up when pipeline starts from step 2.
+    voice_id = (script_json.get("anchor_character", {})
+                .get("voice", {}).get("elevenlabs_voice_id"))
+    if voice_id:
+        os.environ["ELEVENLABS_VOICE_ID"] = voice_id
 
     return jsonify({
         "path": str(output_path),
