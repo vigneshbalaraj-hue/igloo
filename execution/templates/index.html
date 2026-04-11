@@ -847,7 +847,7 @@
       <div class="progress-view">
         <div class="phase-icon"><div class="dot"></div></div>
         <div class="phase-text" id="phase-text">Preparing...</div>
-        <div class="phase-sub" id="phase-sub">Your reel is being crafted</div>
+        <div class="phase-sub" id="phase-sub">Hang tight. This may take a few minutes.</div>
         <div class="progress-track">
           <div class="progress-fill" id="progress-fill"></div>
         </div>
@@ -1320,7 +1320,7 @@
             if (data.remaining_seconds != null) {
               const mins = Math.ceil(data.remaining_seconds / 60);
               document.getElementById('time-remaining').textContent =
-                mins <= 1 ? 'Less than a minute remaining' : `~${mins} minutes remaining`;
+                mins <= 1 ? 'Almost there...' : `~${mins} minutes remaining`;
             }
             if (data.progress != null) {
               document.getElementById('progress-fill').style.width = data.progress + '%';
