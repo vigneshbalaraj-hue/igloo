@@ -54,14 +54,23 @@ export default function CreatePage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [creditBalance, setCreditBalance] = useState<number | null>(null);
+  const [betaAllowed, setBetaAllowed] = useState<boolean | null>(null);
 
-  // Fetch credit balance on mount
+  // Fetch credit balance + beta status on mount
   useEffect(() => {
     if (!isLoaded || !user) return;
-    fetch("/api/credits/balance")
-      .then((r) => r.json())
-      .then((d) => setCreditBalance(d.balance ?? 0))
-      .catch(() => setCreditBalance(0));
+    Promise.all([
+      fetch("/api/credits/balance").then((r) => r.json()),
+      fetch("/api/beta-status").then((r) => r.json()),
+    ])
+      .then(([balData, betaData]) => {
+        setCreditBalance(balData.balance ?? 0);
+        setBetaAllowed(betaData.allowed ?? false);
+      })
+      .catch(() => {
+        setCreditBalance(0);
+        setBetaAllowed(false);
+      });
   }, [isLoaded, user]);
 
   async function handleBuy() {
@@ -181,6 +190,38 @@ export default function CreatePage() {
   const singleTier = PRICING_TIERS.single;
   const doubleTier = PRICING_TIERS.double;
   const hasCredits = creditBalance !== null && creditBalance > 0;
+
+  // Beta full — waitlist screen
+  if (betaAllowed === false) {
+    return (
+      <main className="flex-1 flex flex-col items-center justify-center px-6 py-16">
+        <div className="w-full max-w-xl text-center">
+          <div className="rounded-xl border border-neutral-800 bg-neutral-900 px-8 py-12">
+            <h1 className="text-3xl font-semibold tracking-tight mb-3">
+              Beta is full
+            </h1>
+            <p className="text-neutral-400 leading-relaxed max-w-md mx-auto">
+              Thank you for your interest in Igloo! We&apos;re at capacity for
+              our beta launch. We have your email on file and will reach out as
+              soon as spots open up.
+            </p>
+            <p className="text-neutral-500 text-sm mt-6">
+              We appreciate your patience — it won&apos;t be long.
+            </p>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  // Still loading beta status
+  if (betaAllowed === null) {
+    return (
+      <main className="flex-1 flex items-center justify-center">
+        <p className="text-neutral-500">Loading...</p>
+      </main>
+    );
+  }
 
   return (
     <main className="flex-1 flex flex-col items-center justify-center px-6 py-16">
