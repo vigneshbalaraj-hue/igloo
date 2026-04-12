@@ -55,6 +55,7 @@ export default function CreatePage() {
   const [error, setError] = useState<string | null>(null);
   const [creditBalance, setCreditBalance] = useState<number | null>(null);
   const [betaAllowed, setBetaAllowed] = useState<boolean | null>(null);
+  const [lastPayment, setLastPayment] = useState<{ response: RazorpayHandlerResponse; topic: string; tier: PricingTier } | null>(null);
 
   // Fetch credit balance + beta status on mount
   useEffect(() => {
@@ -118,6 +119,7 @@ export default function CreatePage() {
           },
           theme: { color: "#0a0a0a" },
           handler: async (response: RazorpayHandlerResponse) => {
+            setLastPayment({ response, topic, tier });
             try {
               const triggerRes = await fetch("/api/trigger-run", {
                 method: "POST",
@@ -179,6 +181,37 @@ export default function CreatePage() {
       }
       const { studio_url } = await res.json();
       if (!studio_url) throw new Error("Missing studio URL in response.");
+      window.location.href = studio_url;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRetryTrigger() {
+    if (!lastPayment) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const triggerRes = await fetch("/api/trigger-run", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          topic: lastPayment.topic,
+          tier: lastPayment.tier,
+          razorpay_order_id: lastPayment.response.razorpay_order_id,
+          razorpay_payment_id: lastPayment.response.razorpay_payment_id,
+          razorpay_signature: lastPayment.response.razorpay_signature,
+        }),
+      });
+      if (!triggerRes.ok) {
+        const t = await triggerRes.text();
+        throw new Error(`Retry failed: ${t}`);
+      }
+      const { studio_url } = await triggerRes.json();
+      if (!studio_url) throw new Error("Missing studio URL in response.");
+      setLastPayment(null);
       window.location.href = studio_url;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -325,6 +358,15 @@ export default function CreatePage() {
         {error && (
           <div className="mt-4 rounded-lg bg-red-950 border border-red-900 text-red-200 px-4 py-3 text-sm">
             {error}
+            {lastPayment && (
+              <button
+                onClick={handleRetryTrigger}
+                disabled={busy}
+                className="mt-2 w-full rounded-md bg-red-900 hover:bg-red-800 text-red-100 px-3 py-2 text-sm font-medium transition disabled:opacity-50"
+              >
+                {busy ? "Retrying\u2026" : "Retry \u2014 your payment is safe"}
+              </button>
+            )}
           </div>
         )}
 

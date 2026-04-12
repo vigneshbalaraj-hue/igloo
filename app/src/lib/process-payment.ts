@@ -6,7 +6,7 @@
 // returns the existing one.
 
 import "server-only";
-import { getServerSupabase, getOrCreateUser } from "@/lib/supabase-server";
+import { getServerSupabase, getOrCreateUser, withRetry, supabaseRetry } from "@/lib/supabase-server";
 import { PRICING_TIERS } from "@/lib/pricing";
 import type { PricingTier } from "@/lib/pricing";
 import { mintStudioToken } from "@/lib/studio-token";
@@ -54,40 +54,48 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
   }
 
   // 2. Upsert payment (idempotent on razorpay_payment_id)
-  const { data: payment, error: payErr } = await supabase
-    .from("payments")
-    .upsert(
-      {
-        user_id: dbUser.id,
-        razorpay_payment_id: input.razorpay_payment_id,
-        razorpay_order_id: input.razorpay_order_id,
-        razorpay_signature: input.razorpay_signature,
-        amount_paise: input.amount_paise ?? tierConfig.price_paise,
-        currency: "INR",
-        status: "captured",
-        credits_granted: tierConfig.credits,
-        tier,
-        webhook_event: input.source === "webhook" ? "payment.captured" : "client.handler",
-      },
-      { onConflict: "razorpay_payment_id" }
-    )
-    .select("id")
-    .single();
-
-  if (payErr || !payment) {
-    console.error("[processPayment] payment upsert failed", payErr);
+  let payment: { id: string };
+  try {
+    payment = await supabaseRetry(() =>
+      supabase
+        .from("payments")
+        .upsert(
+          {
+            user_id: dbUser.id,
+            razorpay_payment_id: input.razorpay_payment_id,
+            razorpay_order_id: input.razorpay_order_id,
+            razorpay_signature: input.razorpay_signature,
+            amount_paise: input.amount_paise ?? tierConfig.price_paise,
+            currency: "INR",
+            status: "captured",
+            credits_granted: tierConfig.credits,
+            tier,
+            webhook_event: input.source === "webhook" ? "payment.captured" : "client.handler",
+          },
+          { onConflict: "razorpay_payment_id" }
+        )
+        .select("id")
+        .single()
+    );
+  } catch (e) {
+    console.error("[processPayment] payment upsert failed", e);
     return { ok: false, error: "payment_upsert_failed", status: 500 };
   }
 
   // 3. Check if a run already exists for this payment
-  const { data: existingRun, error: existErr } = await supabase
-    .from("runs")
-    .select("id")
-    .eq("payment_id", payment.id)
-    .maybeSingle();
-
-  if (existErr) {
-    console.error("[processPayment] run lookup failed", existErr);
+  let existingRun: { id: string } | null;
+  try {
+    existingRun = await withRetry(async () => {
+      const { data, error } = await supabase
+        .from("runs")
+        .select("id")
+        .eq("payment_id", payment.id)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    });
+  } catch (e) {
+    console.error("[processPayment] run lookup failed", e);
     return { ok: false, error: "run_lookup_failed", status: 500 };
   }
 
@@ -103,17 +111,20 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
   // 4. Insert credit GRANT for this payment.
   //    The unique index credits_payment_id_payment_unique (migration 0005)
   //    prevents double grants from webhook retries.
-  const { error: grantErr } = await supabase.from("credits").insert({
-    user_id: dbUser.id,
-    delta: tierConfig.credits,
-    reason: "payment",
-    payment_id: payment.id,
-    note: `${input.source} grant (${tier})`,
-  });
-  if (grantErr) {
+  try {
+    await supabaseRetry(() =>
+      supabase.from("credits").insert({
+        user_id: dbUser.id,
+        delta: tierConfig.credits,
+        reason: "payment",
+        payment_id: payment.id,
+        note: `${input.source} grant (${tier})`,
+      })
+    );
+  } catch (e) {
     // 23505 = unique_violation — grant already exists (idempotent, continue)
-    if ((grantErr as { code?: string } | null)?.code !== "23505") {
-      console.error("[processPayment] credit grant insert failed", grantErr);
+    if ((e as { code?: string })?.code !== "23505") {
+      console.error("[processPayment] credit grant insert failed", e);
       return { ok: false, error: "credit_grant_failed", status: 500 };
     }
   }
@@ -123,20 +134,23 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
   //    status='draft' — user has paid but hasn't finished the studio
   //    wizard yet. Flips to 'running' or 'queued' when they click
   //    "Create My Reel" inside the Flask studio.
-  const { data: run, error: runErr } = await supabase
-    .from("runs")
-    .insert({
-      user_id: dbUser.id,
-      payment_id: payment.id,
-      status: "draft",
-      prompt: input.topic,
-    })
-    .select("id")
-    .single();
-
-  if (runErr || !run) {
+  let run: { id: string };
+  try {
+    run = await supabaseRetry(() =>
+      supabase
+        .from("runs")
+        .insert({
+          user_id: dbUser.id,
+          payment_id: payment.id,
+          status: "draft",
+          prompt: input.topic,
+        })
+        .select("id")
+        .single()
+    );
+  } catch (e) {
     // 23505 = unique_violation. The other caller won the race.
-    if ((runErr as { code?: string } | null)?.code === "23505") {
+    if ((e as { code?: string })?.code === "23505") {
       const { data: raced } = await supabase
         .from("runs")
         .select("id")
@@ -151,7 +165,7 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
         };
       }
     }
-    console.error("[processPayment] run insert failed", runErr);
+    console.error("[processPayment] run insert failed", e);
     return { ok: false, error: "run_insert_failed", status: 500 };
   }
 
