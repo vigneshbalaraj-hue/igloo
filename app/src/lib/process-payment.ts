@@ -39,6 +39,29 @@ export type ProcessPaymentResult =
   | { ok: true; run_id: string; created: boolean; studio_url: string }
   | { ok: false; error: string; status: number };
 
+/** Fire-and-forget: log a payment failure to the payment_alerts table. */
+function logPaymentAlert(
+  supabase: ReturnType<typeof getServerSupabase>,
+  input: ProcessPaymentInput,
+  step: string,
+  errorMessage: string
+) {
+  supabase
+    .from("payment_alerts")
+    .insert({
+      razorpay_payment_id: input.razorpay_payment_id,
+      razorpay_order_id: input.razorpay_order_id,
+      email: input.email,
+      clerk_user_id: input.clerkUserId,
+      step,
+      error_message: errorMessage,
+      source: input.source,
+    })
+    .then(({ error }) => {
+      if (error) console.error("[payment_alert] failed to insert alert", error);
+    });
+}
+
 export async function processPayment(input: ProcessPaymentInput): Promise<ProcessPaymentResult> {
   const supabase = getServerSupabase();
   const tier = input.tier ?? "single";
@@ -50,6 +73,7 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
     dbUser = await getOrCreateUser(input.clerkUserId, input.email);
   } catch (e) {
     console.error("[processPayment] getOrCreateUser failed", e);
+    logPaymentAlert(supabase, input, "user_create_failed", String(e));
     return { ok: false, error: "user_create_failed", status: 500 };
   }
 
@@ -79,6 +103,7 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
     );
   } catch (e) {
     console.error("[processPayment] payment upsert failed", e);
+    logPaymentAlert(supabase, input, "payment_upsert_failed", String(e));
     return { ok: false, error: "payment_upsert_failed", status: 500 };
   }
 
@@ -96,6 +121,7 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
     });
   } catch (e) {
     console.error("[processPayment] run lookup failed", e);
+    logPaymentAlert(supabase, input, "run_lookup_failed", String(e));
     return { ok: false, error: "run_lookup_failed", status: 500 };
   }
 
@@ -125,6 +151,7 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
     // 23505 = unique_violation — grant already exists (idempotent, continue)
     if ((e as { code?: string })?.code !== "23505") {
       console.error("[processPayment] credit grant insert failed", e);
+      logPaymentAlert(supabase, input, "credit_grant_failed", String(e));
       return { ok: false, error: "credit_grant_failed", status: 500 };
     }
   }
@@ -166,6 +193,7 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
       }
     }
     console.error("[processPayment] run insert failed", e);
+    logPaymentAlert(supabase, input, "run_insert_failed", String(e));
     return { ok: false, error: "run_insert_failed", status: 500 };
   }
 
