@@ -862,7 +862,7 @@
           <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
         </div>
         <div class="complete-title">Your reel is under review.</div>
-        <div class="complete-sub" id="complete-sub">Our team does a final quality check on every reel before delivery. You'll be notified when it's ready.</div>
+        <div class="complete-sub" id="complete-sub">During our beta, we hand-check every reel before it ships to you. You'll be notified when it's ready.</div>
         <div class="complete-sub" id="complete-redirect" style="margin-top:8px;color:var(--text-muted)">Redirecting you back to Igloo…</div>
       </div>
     </div>
@@ -1333,7 +1333,7 @@
               const mins = Math.floor(elapsed / 60);
               const secs = elapsed % 60;
               document.getElementById('complete-sub').textContent =
-                `Crafted in ${mins}m ${secs}s. Our team does a final quality check on every reel before delivery.`;
+                `Crafted in ${mins}m ${secs}s. During our beta, we hand-check every reel before it ships to you.`;
               showView('complete');
               const target = data.redirect_url || IGLOO_APP_URL;
               if (target) {

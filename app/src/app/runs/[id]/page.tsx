@@ -26,7 +26,7 @@ const STATUS_COPY: Record<Run["status"], string> = {
   draft: "You haven't finished designing your reel yet.",
   queued: "Warming up the engines…",
   running: "Crafting your reel — this takes about 8 minutes.",
-  awaiting_review: "Almost done — final quality check.",
+  awaiting_review: "Almost done — during our beta, we hand-check every reel before it ships to you.",
   delivered: "Ready to watch.",
   rejected: "We couldn't ship this one. Refunding your credit.",
   failed: "Something broke on our end. We've been notified.",
