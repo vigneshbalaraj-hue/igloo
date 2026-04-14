@@ -197,21 +197,11 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
     return { ok: false, error: "run_insert_failed", status: 500 };
   }
 
-  // 6. Insert credit CONSUMPTION row tied to this run (1 credit per run).
-  const { error: consumeErr } = await supabase.from("credits").insert({
-    user_id: dbUser.id,
-    delta: -1,
-    reason: "run",
-    run_id: run.id,
-    note: "reel consumption",
-  });
-  if (consumeErr) {
-    // Not fatal — log and continue. Net balance will be off by 1
-    // until reconciled, but the run still belongs to the user.
-    console.error("[processPayment] credit consumption insert failed (non-fatal)", consumeErr);
-  }
+  // Credit CONSUMPTION is no longer inserted here (migration 0008).
+  // It happens at pipeline launch via consume_credit_for_run() so that
+  // abandoned-wizard drafts don't silently burn the user's credit.
 
-  // 7. Mint a signed studio URL — the browser navigates here after
+  // 6. Mint a signed studio URL — the browser navigates here after
   //    payment capture. No Modal trigger call; the Flask studio is
   //    always warm via min_containers=1.
   return {

@@ -266,6 +266,24 @@ class SlotAcquireError(Exception):
     """Raised when a run can never acquire a slot — missing row or wrong status."""
 
 
+class InsufficientCreditsError(Exception):
+    """Raised when consume_credit_for_run finds the user has no credits."""
+
+
+def consume_credit_for_run(run_id: str):
+    """Consume 1 credit for this run via Postgres RPC. Idempotent per run_id.
+    Raises InsufficientCreditsError if balance < 1."""
+    sb = supabase_client()
+    if sb is None:
+        return  # dev mode: skip
+    try:
+        sb.rpc("consume_credit_for_run", {"p_run_id": run_id}).execute()
+    except Exception as e:
+        if "insufficient_credits" in str(e):
+            raise InsufficientCreditsError(f"run {run_id}: insufficient credits") from e
+        raise
+
+
 def try_acquire_slot(run_id: str) -> bool:
     """
     Atomically promote a draft/queued run to 'running' if a slot is available.
@@ -305,6 +323,11 @@ def try_acquire_slot(run_id: str) -> bool:
     if running_count >= IGLOO_MAX_PIPELINES:
         return False
 
+    # Consume the user's credit at the moment of the draft->running
+    # transition. Idempotent per run_id, so promoting queued->running
+    # later is a no-op. Raises InsufficientCreditsError if balance < 1.
+    consume_credit_for_run(run_id)
+
     try:
         result = sb.table("runs").update({
             "status": "running",
@@ -320,6 +343,9 @@ def mark_run_queued(run_id: str):
     sb = supabase_client()
     if sb is None:
         return
+    # Consume credit at draft->queued too. Idempotent with the later
+    # queued->running promotion.
+    consume_credit_for_run(run_id)
     try:
         sb.table("runs").update({"status": "queued"}) \
             .eq("id", run_id).in_("status", ["draft"]).execute()
@@ -1295,8 +1321,13 @@ def api_pipeline_start():
         acquired = try_acquire_slot(run_id)
     except SlotAcquireError as e:
         return jsonify({"error": f"run not acquirable: {e}"}), 409
+    except InsufficientCreditsError:
+        return jsonify({"error": "insufficient_credits"}), 402
     if not acquired:
-        mark_run_queued(run_id)
+        try:
+            mark_run_queued(run_id)
+        except InsufficientCreditsError:
+            return jsonify({"error": "insufficient_credits"}), 402
         state["queue_status"] = "queued"
         state["script_path"] = script_path
         # Stash launch params so queue-status can spawn the thread later.
@@ -1348,6 +1379,10 @@ def api_pipeline_queue_status():
         state["queue_status"] = None
         state.pop("pending_launch", None)
         return jsonify({"status": "error", "error": str(e)}), 409
+    except InsufficientCreditsError:
+        state["queue_status"] = None
+        state.pop("pending_launch", None)
+        return jsonify({"status": "error", "error": "insufficient_credits"}), 402
     if promoted:
         launch = state.get("pending_launch") or {}
         state.pop("pending_launch", None)
