@@ -86,8 +86,18 @@ def api_request(method: str, path: str, token: str, body: dict = None, retries: 
             return result
 
         except urllib.error.HTTPError as e:
-            error_body = e.read().decode()
+            error_body = ""
+            try:
+                error_body = e.read().decode()
+            except Exception:
+                pass
+            retryable = e.code == 429 or 500 <= e.code < 600
             print(f"  API ERROR {e.code}: {error_body[:500]}", file=sys.stderr)
+            if retryable and attempt < retries - 1:
+                wait = 5 * (attempt + 1)
+                print(f"  {e.code} is transient; retrying in {wait}s (attempt {attempt+1}/{retries})...")
+                time.sleep(wait)
+                continue
             raise
         except (urllib.error.URLError, ConnectionError, OSError) as e:
             if attempt < retries - 1:
@@ -111,7 +121,7 @@ def audio_to_base64_url(audio_path: Path) -> str:
 def get_audio_duration_ms(audio_path: Path) -> int:
     cmd = [FFPROBE, "-v", "error", "-show_entries", "format=duration",
            "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     duration_s = float(result.stdout.strip())
     return int(duration_s * 1000)
 
@@ -275,6 +285,11 @@ def generate_broll_parallel(broll_jobs: list, token: str, images_dir: Path, outp
         print(f"  {job['name']} — saved: {out_path}")
 
     print(f"\n  B-roll complete: {len(results)}/{len(broll_jobs)} succeeded\n")
+    if len(results) < len(broll_jobs):
+        missing = [j["name"] for j in broll_jobs if not any(job_map[tid]["name"] == j["name"] for tid in results)]
+        print(f"ERROR: {len(broll_jobs) - len(results)} b-roll clip(s) failed/timed out: {missing}", file=sys.stderr)
+        print("ERROR_CODE: KLING_FAILED", file=sys.stderr)
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +363,11 @@ def generate_anchors_avatar(anchor_jobs: list, token: str, images_dir: Path,
 
     succeeded = sum(1 for n in task_map.values() if (output_dir / f"{n}.mp4").exists())
     print(f"\n  Anchor complete: {succeeded}/{len(anchor_jobs)} succeeded\n")
+    if succeeded < len(anchor_jobs):
+        missing = [n for n in task_map.values() if not (output_dir / f"{n}.mp4").exists()]
+        print(f"ERROR: {len(anchor_jobs) - succeeded} anchor clip(s) failed/timed out: {missing}", file=sys.stderr)
+        print("ERROR_CODE: KLING_FAILED", file=sys.stderr)
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -487,6 +507,11 @@ def generate_all_parallel(broll_jobs: list, anchor_jobs: list, token: str,
         print(f"  {info['name']} -- saved ({duration}s)")
 
     print(f"\n  All clips: {len(results)}/{total} succeeded\n")
+    if len(results) < len(all_tasks):
+        missing = [t["label"] for t in all_tasks if t["task_id"] not in results]
+        print(f"ERROR: {len(all_tasks) - len(results)} clip(s) failed/timed out: {missing}", file=sys.stderr)
+        print("ERROR_CODE: KLING_FAILED", file=sys.stderr)
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------

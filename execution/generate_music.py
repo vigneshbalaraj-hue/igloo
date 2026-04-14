@@ -40,7 +40,9 @@ def load_env(key: str) -> str:
 
 
 def generate_music(prompt: str, duration_ms: int, api_key: str, output_path: Path):
-    """Call ElevenLabs Music Compose API."""
+    """Call ElevenLabs Music Compose API. Retries 3x on 5xx/429/timeouts."""
+    from http_retry import retry_with_backoff, RetryExhaustedError
+
     url = "https://api.elevenlabs.io/v1/music/compose"
 
     payload = {
@@ -49,63 +51,76 @@ def generate_music(prompt: str, duration_ms: int, api_key: str, output_path: Pat
     }
 
     data = json.dumps(payload).encode()
-    req = urllib.request.Request(url, data=data, method="POST")
-    req.add_header("xi-api-key", api_key)
-    req.add_header("Content-Type", "application/json")
+
+    def _open_request():
+        req = urllib.request.Request(url, data=data, method="POST")
+        req.add_header("xi-api-key", api_key)
+        req.add_header("Content-Type", "application/json")
+        return urllib.request.urlopen(req, timeout=300)
 
     print(f"Generating music ({duration_ms}ms)...")
     print(f"Prompt: {prompt[:120]}...")
 
     try:
-        with urllib.request.urlopen(req, timeout=300) as resp:
-            content_type = resp.headers.get("Content-Type", "")
-
-            if "audio" in content_type or "octet-stream" in content_type:
-                # Response is raw audio bytes
-                audio_bytes = resp.read()
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(output_path, "wb") as f:
-                    f.write(audio_bytes)
-                print(f"Music saved: {output_path} ({len(audio_bytes) / 1024:.1f} KB)")
-                return
-
-            # Response is JSON (may contain base64 audio or generation ID)
-            result = json.loads(resp.read().decode())
-
-            # Check for base64 audio in response
-            audio_b64 = result.get("audio_base64") or result.get("audio")
-            if audio_b64:
-                import base64
-                audio_bytes = base64.b64decode(audio_b64)
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(output_path, "wb") as f:
-                    f.write(audio_bytes)
-                print(f"Music saved: {output_path} ({len(audio_bytes) / 1024:.1f} KB)")
-                return
-
-            # If we get a generation/task ID, we need to poll
-            gen_id = result.get("generation_id") or result.get("id") or result.get("task_id")
-            if gen_id:
-                print(f"Generation started, ID: {gen_id}")
-                poll_and_download(gen_id, api_key, output_path)
-                return
-
-            # Unknown response format
-            print(f"Unexpected response: {json.dumps(result, indent=2)[:500]}", file=sys.stderr)
-            sys.exit(1)
-
+        resp_cm = retry_with_backoff(_open_request, label="elevenlabs-music")
+    except RetryExhaustedError as e:
+        print(f"ERROR: ElevenLabs Music failed after retries: {e}", file=sys.stderr)
+        print("ERROR_CODE: MUSIC_FAILED", file=sys.stderr)
+        sys.exit(1)
     except urllib.error.HTTPError as e:
-        error_body = e.read().decode()
+        # 4xx (e.g. copyrighted content) — not retryable. Fall through to
+        # existing handler below, which prints prompt_suggestion.
+        error_body = ""
+        try:
+            error_body = e.read().decode()
+        except Exception:
+            pass
         print(f"ERROR {e.code}: {error_body}", file=sys.stderr)
-
-        # Check for prompt suggestion (copyrighted content rejection)
         try:
             err = json.loads(error_body)
             if "prompt_suggestion" in err:
                 print(f"\nSuggested prompt: {err['prompt_suggestion']}")
         except json.JSONDecodeError:
             pass
+        print("ERROR_CODE: MUSIC_FAILED", file=sys.stderr)
+        sys.exit(1)
 
+    with resp_cm as resp:
+        content_type = resp.headers.get("Content-Type", "")
+
+        if "audio" in content_type or "octet-stream" in content_type:
+            # Response is raw audio bytes
+            audio_bytes = resp.read()
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "wb") as f:
+                f.write(audio_bytes)
+            print(f"Music saved: {output_path} ({len(audio_bytes) / 1024:.1f} KB)")
+            return
+
+        # Response is JSON (may contain base64 audio or generation ID)
+        result = json.loads(resp.read().decode())
+
+        # Check for base64 audio in response
+        audio_b64 = result.get("audio_base64") or result.get("audio")
+        if audio_b64:
+            import base64
+            audio_bytes = base64.b64decode(audio_b64)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "wb") as f:
+                f.write(audio_bytes)
+            print(f"Music saved: {output_path} ({len(audio_bytes) / 1024:.1f} KB)")
+            return
+
+        # If we get a generation/task ID, we need to poll
+        gen_id = result.get("generation_id") or result.get("id") or result.get("task_id")
+        if gen_id:
+            print(f"Generation started, ID: {gen_id}")
+            poll_and_download(gen_id, api_key, output_path)
+            return
+
+        # Unknown response format
+        print(f"Unexpected response: {json.dumps(result, indent=2)[:500]}", file=sys.stderr)
+        print("ERROR_CODE: MUSIC_FAILED", file=sys.stderr)
         sys.exit(1)
 
 

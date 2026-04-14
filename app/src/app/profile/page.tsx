@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { PRICING_TIERS } from "@/lib/pricing";
 import type { PricingTier } from "@/lib/pricing";
+import { fetchWithTimeout } from "@/lib/fetch-timeout";
 
 type RunSummary = {
   id: string;
@@ -103,11 +104,11 @@ export default function ProfilePage() {
     }
 
     Promise.all([
-      fetch("/api/credits/balance").then((r) => r.json()),
-      fetch("/api/credits/history").then((r) => r.json()),
-      fetch("/api/runs").then((r) => r.json()),
-      fetch("/api/payments").then((r) => r.json()),
-      fetch("/api/runs/feedback-status").then((r) => r.json()),
+      fetchWithTimeout("/api/credits/balance").then((r) => r.json()),
+      fetchWithTimeout("/api/credits/history").then((r) => r.json()),
+      fetchWithTimeout("/api/runs").then((r) => r.json()),
+      fetchWithTimeout("/api/payments").then((r) => r.json()),
+      fetchWithTimeout("/api/runs/feedback-status").then((r) => r.json()),
     ])
       .then(([balData, histData, runsData, payData, fbData]) => {
         setBalance(balData.balance ?? 0);

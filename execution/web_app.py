@@ -244,6 +244,56 @@ def supabase_client():
 
 
 # ---------------------------------------------------------------------------
+# Pipeline alerting (mirrors logPaymentAlert in app/src/lib/process-payment.ts).
+# Inserts a row into pipeline_alerts so admin can see silent DB failures that
+# previously sat in `except: pass` blocks. Fire-and-forget — logging must not
+# cascade into another failure.
+# ---------------------------------------------------------------------------
+
+def log_pipeline_alert(
+    kind: str,
+    *,
+    run_id: str | None = None,
+    user_id: str | None = None,
+    error_message: str | None = None,
+    context: dict | None = None,
+):
+    sb = supabase_client()
+    if sb is None:
+        print(f"[pipeline_alert] {kind} run={run_id} err={error_message}", file=sys.stderr)
+        return
+    try:
+        row = {"kind": kind}
+        if run_id:
+            row["run_id"] = run_id
+        if user_id:
+            row["user_id"] = user_id
+        if error_message:
+            row["error_message"] = str(error_message)[:2000]
+        if context:
+            row["context"] = context
+        sb.table("pipeline_alerts").insert(row).execute()
+    except Exception as e:
+        # Don't let alerting itself cascade — stderr is the fallback of last resort.
+        print(f"[pipeline_alert] insert failed kind={kind} err={e}", file=sys.stderr)
+
+
+def _supabase_retry(fn, attempts: int = 3, base_delay: float = 0.2):
+    """Run `fn` with exponential backoff. Mirrors supabaseRetry in supabase-server.ts.
+    Raises the last exception if all attempts fail."""
+    last = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as e:
+            last = e
+            if i == attempts - 1:
+                break
+            time.sleep(base_delay * (2 ** i))
+    raise last  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
 # Pipeline-slot queue (Policy 2: cap concurrent pipelines, wizard is free)
 # ---------------------------------------------------------------------------
 
@@ -258,8 +308,8 @@ def _sweep_orphan_queued():
             "status": "failed",
             "rejection_reason": "queue_timeout",
         }).eq("status", "queued").lt("created_at", cutoff).execute()
-    except Exception:
-        pass
+    except Exception as e:
+        log_pipeline_alert("queue_sweep_failed", error_message=str(e))
 
 
 class SlotAcquireError(Exception):
@@ -349,12 +399,21 @@ def mark_run_queued(run_id: str):
     try:
         sb.table("runs").update({"status": "queued"}) \
             .eq("id", run_id).in_("status", ["draft"]).execute()
-    except Exception:
-        pass
+    except Exception as e:
+        # Credit has already been consumed above; if the status update fails,
+        # the user's run is stuck at 'draft' but their credit is gone.
+        # Admin needs to see this — they can refund manually + retry.
+        log_pipeline_alert(
+            "mark_queued_update_lost",
+            run_id=run_id,
+            error_message=str(e),
+        )
 
 
-def queue_position(run_id: str) -> int:
-    """Return how many runs are ahead of this one in the queue (0 = next up)."""
+def queue_position(run_id: str) -> int | None:
+    """Return how many runs are ahead of this one in the queue (0 = next up).
+    Returns None if the lookup fails — callers should render "position unknown"
+    rather than the misleading "0 = next up"."""
     sb = supabase_client()
     if sb is None:
         return 0
@@ -366,8 +425,9 @@ def queue_position(run_id: str) -> int:
         ahead = sb.table("runs").select("id", count="exact") \
             .eq("status", "queued").lt("created_at", row["created_at"]).execute()
         return ahead.count or 0
-    except Exception:
-        return 0
+    except Exception as e:
+        log_pipeline_alert("queue_position_failed", run_id=run_id, error_message=str(e))
+        return None
 
 
 def upload_final_to_supabase(run_id: str, final_path: Path) -> tuple[bool, str | None]:
@@ -405,23 +465,78 @@ def mark_run_failed(run_id: str, reason: str, qc_notes: str | None = None):
             "qc_notes": (qc_notes or "")[-2000:],
             "finished_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", run_id).execute()
-    except Exception:
-        pass
+    except Exception as e:
+        # Run stays in 'running' forever if this is silently swallowed.
+        log_pipeline_alert(
+            "mark_failed_update_lost",
+            run_id=run_id,
+            error_message=str(e),
+            context={"reason": reason[:200]},
+        )
 
     # Auto-refund: give the customer their credit back on pipeline failure.
+    # Only applies if a consumption row actually exists — avoids double-refund
+    # for runs that failed before consume_credit_for_run() (e.g. draft-time).
+    user_id = None
     try:
-        row = sb.table("runs").select("user_id") \
-            .eq("id", run_id).single().execute().data
-        if row and row.get("user_id"):
-            sb.table("credits").insert({
-                "user_id": row["user_id"],
-                "delta": 1,
-                "reason": "refund",
-                "run_id": run_id,
-                "note": f"auto-refund: {reason[:200]}",
-            }).execute()
-    except Exception:
-        pass
+        row = _supabase_retry(lambda: sb.table("runs").select("user_id")
+                              .eq("id", run_id).single().execute().data)
+        user_id = (row or {}).get("user_id")
+    except Exception as e:
+        log_pipeline_alert(
+            "refund_failed",
+            run_id=run_id,
+            error_message=f"user_id lookup failed: {e}",
+            context={"reason": reason[:200]},
+        )
+        return
+
+    if not user_id:
+        return
+
+    # Idempotency: refund iff exactly one consumption row exists and no
+    # auto-refund row exists yet. Both checks inside the same retry so that
+    # a transient Supabase blip doesn't cause a double-refund on the next
+    # retry attempt.
+    try:
+        consumed = _supabase_retry(lambda: sb.table("credits").select("id", count="exact")
+                                   .eq("run_id", run_id).eq("reason", "run").execute())
+        if (consumed.count or 0) == 0:
+            return  # Nothing was ever consumed.
+        existing_refund = _supabase_retry(lambda: sb.table("credits")
+                                          .select("id", count="exact")
+                                          .eq("run_id", run_id)
+                                          .eq("reason", "refund")
+                                          .like("note", "auto-refund:%")
+                                          .execute())
+        if (existing_refund.count or 0) > 0:
+            return  # Already refunded.
+    except Exception as e:
+        log_pipeline_alert(
+            "refund_failed",
+            run_id=run_id,
+            user_id=user_id,
+            error_message=f"idempotency check failed: {e}",
+            context={"reason": reason[:200]},
+        )
+        return
+
+    try:
+        _supabase_retry(lambda: sb.table("credits").insert({
+            "user_id": user_id,
+            "delta": 1,
+            "reason": "refund",
+            "run_id": run_id,
+            "note": f"auto-refund: {reason[:200]}",
+        }).execute())
+    except Exception as e:
+        log_pipeline_alert(
+            "refund_failed",
+            run_id=run_id,
+            user_id=user_id,
+            error_message=str(e),
+            context={"reason": reason[:200]},
+        )
 
 
 def fetch_run_prompt(run_id: str) -> str | None:

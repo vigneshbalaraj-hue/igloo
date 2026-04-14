@@ -50,7 +50,9 @@ def load_env(key: str) -> str:
 
 
 def generate_image(prompt: str, api_key: str, aspect_ratio: str = "9:16") -> bytes:
-    """Call Imagen 3 API and return PNG bytes."""
+    """Call Imagen 3 API and return PNG bytes. Retries 3x on 5xx/429/timeouts."""
+    from http_retry import retry_with_backoff
+
     payload = {
         "instances": [{"prompt": prompt}],
         "parameters": {
@@ -61,16 +63,23 @@ def generate_image(prompt: str, api_key: str, aspect_ratio: str = "9:16") -> byt
     }
 
     data = json.dumps(payload).encode()
-    req = urllib.request.Request(f"{API_URL}?key={api_key}", data=data, method="POST")
-    req.add_header("Content-Type", "application/json")
 
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            result = json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode()
-        print(f"  ERROR {e.code}: {error_body[:500]}", file=sys.stderr)
-        raise
+    def _do_call():
+        req = urllib.request.Request(f"{API_URL}?key={api_key}", data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            error_body = ""
+            try:
+                error_body = e.read().decode()
+            except Exception:
+                pass
+            print(f"  ERROR {e.code}: {error_body[:500]}", file=sys.stderr)
+            raise
+
+    result = retry_with_backoff(_do_call, label="imagen")
 
     predictions = result.get("predictions", [])
     if not predictions:
@@ -140,6 +149,7 @@ def main():
     print(f"Generating {len(jobs)} images with Imagen 3 ({args.aspect_ratio})...")
     print()
 
+    failed: list[tuple[str, str]] = []
     for i, job in enumerate(jobs):
         name = job["name"]
         prompt = job["prompt"]
@@ -160,13 +170,19 @@ def main():
             print(f"  Saved: {out_path} ({len(img_bytes) / 1024:.0f} KB)")
         except Exception as e:
             print(f"  FAILED: {e}", file=sys.stderr)
-            continue
+            failed.append((name, str(e)))
 
         # Small delay to avoid rate limiting
         if i < len(jobs) - 1:
             time.sleep(1)
 
     print()
+    if failed:
+        print(f"ERROR: {len(failed)}/{len(jobs)} images failed after retries:", file=sys.stderr)
+        for name, err in failed:
+            print(f"  - {name}: {err}", file=sys.stderr)
+        print("ERROR_CODE: IMAGEN_FAILED", file=sys.stderr)
+        sys.exit(1)
     print(f"Done. Images saved to {output_dir}")
 
 

@@ -34,10 +34,22 @@ XFADE_DURATION = 0.3  # seconds per cross transition
 LIP_SYNC_OFFSET = 0.0  # disabled — Kling's issue is phoneme accuracy, not startup lag
 
 
+# 10-minute wall clock for any single ffmpeg call. A corrupted input or pathological
+# filter graph can otherwise hang the Fly worker indefinitely and starve the
+# 3-slot pipeline queue.
+FFMPEG_TIMEOUT_SECONDS = 600
+FFPROBE_TIMEOUT_SECONDS = 60
+
+
 def run_ffmpeg(args: list, label: str = "", verbose: bool = False):
     cmd = [FFMPEG, "-y"] + args
     print(f"  Running: {label or ' '.join(cmd[:6])}...")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        print(f"  FFMPEG TIMEOUT ({FFMPEG_TIMEOUT_SECONDS}s): {label}", file=sys.stderr)
+        print("ERROR_CODE: FFMPEG_TIMEOUT", file=sys.stderr)
+        raise RuntimeError(f"ffmpeg timed out after {FFMPEG_TIMEOUT_SECONDS}s: {label}")
     if result.returncode != 0:
         print(f"  FFMPEG ERROR: {result.stderr[-800:]}", file=sys.stderr)
         raise RuntimeError(f"ffmpeg failed: {label}")
@@ -52,7 +64,7 @@ def run_ffmpeg(args: list, label: str = "", verbose: bool = False):
 def get_duration(filepath: Path) -> float:
     cmd = [FFPROBE, "-v", "error", "-show_entries", "format=duration",
            "-of", "default=noprint_wrappers=1:nokey=1", str(filepath)]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFPROBE_TIMEOUT_SECONDS)
     return float(result.stdout.strip())
 
 
@@ -301,7 +313,7 @@ def build_composite_voiceover(clip_order: list, clips_dir: Path, voiceover_path:
                     [FFMPEG, "-y", "-ss", f"{scene_dur:.3f}", "-i", str(audio_out),
                      "-af", "silencedetect=noise=-40dB:d=0.01",
                      "-f", "null", "-"],
-                    capture_output=True, text=True
+                    capture_output=True, text=True, timeout=FFPROBE_TIMEOUT_SECONDS,
                 )
                 stderr = tail_check.stderr
                 # If silencedetect does NOT report silence_start, the tail has speech energy

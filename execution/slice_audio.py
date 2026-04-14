@@ -69,7 +69,12 @@ def slice_audio(voiceover_path: Path, output_dir: Path, slices: list):
         ]
 
         print(f"  Scene {sid}: {start:.2f}s -> {s['end']:.2f}s ({duration:.2f}s)")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            print(f"    FFMPEG TIMEOUT slicing scene {sid}", file=sys.stderr)
+            print("ERROR_CODE: FFMPEG_TIMEOUT", file=sys.stderr)
+            sys.exit(1)
         if result.returncode != 0:
             print(f"    FFMPEG ERROR: {result.stderr[:300]}", file=sys.stderr)
             continue

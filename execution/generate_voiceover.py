@@ -161,7 +161,7 @@ def load_env(key: str) -> str:
 def find_ffmpeg() -> str:
     for candidate in ["ffmpeg", r"C:\ffmpeg\bin\ffmpeg.exe", r"C:\ProgramData\chocolatey\bin\ffmpeg.exe"]:
         try:
-            subprocess.run([candidate, "-version"], capture_output=True, check=True)
+            subprocess.run([candidate, "-version"], capture_output=True, check=True, timeout=10)
             return candidate
         except (FileNotFoundError, subprocess.CalledProcessError):
             continue
@@ -172,7 +172,7 @@ def find_ffmpeg() -> str:
 def find_ffprobe() -> str:
     for candidate in ["ffprobe", r"C:\ffmpeg\bin\ffprobe.exe", r"C:\ProgramData\chocolatey\bin\ffprobe.exe"]:
         try:
-            subprocess.run([candidate, "-version"], capture_output=True, check=True)
+            subprocess.run([candidate, "-version"], capture_output=True, check=True, timeout=10)
             return candidate
         except (FileNotFoundError, subprocess.CalledProcessError):
             continue
@@ -184,7 +184,7 @@ def get_audio_duration_s(filepath: str) -> float:
     ffprobe = find_ffprobe()
     result = subprocess.run(
         [ffprobe, "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", filepath],
-        capture_output=True, text=True
+        capture_output=True, text=True, timeout=60,
     )
     return float(result.stdout.strip())
 
@@ -221,17 +221,33 @@ def generate_scene_audio(text: str, voice_id: str, api_key: str, settings: dict,
     req.add_header("xi-api-key", api_key)
     req.add_header("Content-Type", "application/json")
 
-    try:
+    from http_retry import retry_with_backoff, RetryExhaustedError
+
+    def _do_call():
         with urllib.request.urlopen(req, timeout=120) as resp:
-            result = json.loads(resp.read().decode())
+            return json.loads(resp.read().decode())
+
+    try:
+        result = retry_with_backoff(_do_call, label="elevenlabs-tts")
     except urllib.error.HTTPError as e:
-        error_body = e.read().decode()
+        # Non-retryable (4xx) — bubble typed error for the UI.
+        error_body = ""
+        try:
+            error_body = e.read().decode()
+        except Exception:
+            pass
         print(f"  ERROR {e.code}: {error_body}", file=sys.stderr)
+        print(f"ERROR_CODE: TTS_FAILED", file=sys.stderr)
+        sys.exit(1)
+    except RetryExhaustedError as e:
+        print(f"  ERROR: ElevenLabs TTS failed after retries: {e}", file=sys.stderr)
+        print(f"ERROR_CODE: TTS_FAILED", file=sys.stderr)
         sys.exit(1)
 
     audio_b64 = result.get("audio_base64", "")
     if not audio_b64:
         print(f"  ERROR: No audio returned for: {text[:50]}...", file=sys.stderr)
+        print(f"ERROR_CODE: TTS_FAILED", file=sys.stderr)
         sys.exit(1)
 
     audio_bytes = base64.b64decode(audio_b64)
@@ -311,7 +327,7 @@ def generate_scene_by_scene(script: dict, voice_id: str, api_key: str,
         subprocess.run([
             ffmpeg, "-y", "-f", "lavfi", "-i", f"anullsrc=r=44100:cl=mono",
             "-t", f"{gap_ms / 1000:.3f}", "-q:a", "9", str(gap_path)
-        ], capture_output=True, check=True)
+        ], capture_output=True, check=True, timeout=60)
 
     # Generate each segment
     scene_files = []
@@ -416,7 +432,7 @@ def generate_scene_by_scene(script: dict, voice_id: str, api_key: str,
     subprocess.run([
         ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
         "-c:a", "libmp3lame", "-q:a", "2", str(audio_path)
-    ], capture_output=True, check=True)
+    ], capture_output=True, check=True, timeout=600)
 
     total_duration = get_audio_duration_s(str(audio_path))
     file_size = audio_path.stat().st_size / 1024

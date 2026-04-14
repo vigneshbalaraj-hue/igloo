@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useUser } from "@clerk/nextjs";
 import { PRICING_TIERS } from "@/lib/pricing";
 import type { PricingTier } from "@/lib/pricing";
+import { fetchWithTimeout } from "@/lib/fetch-timeout";
 
 type RazorpayHandlerResponse = {
   razorpay_order_id: string;
@@ -61,8 +62,8 @@ export default function CreatePage() {
   useEffect(() => {
     if (!isLoaded || !user) return;
     Promise.all([
-      fetch("/api/credits/balance").then((r) => r.json()),
-      fetch("/api/beta-status").then((r) => r.json()),
+      fetchWithTimeout("/api/credits/balance").then((r) => r.json()),
+      fetchWithTimeout("/api/beta-status").then((r) => r.json()),
     ])
       .then(([balData, betaData]) => {
         setCreditBalance(balData.balance ?? 0);
@@ -93,11 +94,11 @@ export default function CreatePage() {
       const tierConfig = PRICING_TIERS[tier];
 
       // 1. Create a Razorpay order on the server
-      const orderRes = await fetch("/api/razorpay/order", {
+      const orderRes = await fetchWithTimeout("/api/razorpay/order", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ topic, tier }),
-      });
+      }, 30_000);
       if (!orderRes.ok) {
         const t = await orderRes.text();
         throw new Error(`Order create failed: ${t}`);
@@ -121,7 +122,7 @@ export default function CreatePage() {
           handler: async (response: RazorpayHandlerResponse) => {
             setLastPayment({ response, topic, tier });
             try {
-              const triggerRes = await fetch("/api/trigger-run", {
+              const triggerRes = await fetchWithTimeout("/api/trigger-run", {
                 method: "POST",
                 headers: { "content-type": "application/json" },
                 body: JSON.stringify({
@@ -131,7 +132,7 @@ export default function CreatePage() {
                   razorpay_payment_id: response.razorpay_payment_id,
                   razorpay_signature: response.razorpay_signature,
                 }),
-              });
+              }, 30_000);
               if (!triggerRes.ok) {
                 const t = await triggerRes.text();
                 throw new Error(`Trigger failed: ${t}`);
@@ -166,11 +167,11 @@ export default function CreatePage() {
     setBusy(true);
 
     try {
-      const res = await fetch("/api/redeem-credit", {
+      const res = await fetchWithTimeout("/api/redeem-credit", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ topic }),
-      });
+      }, 20_000);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         if (data.error === "insufficient_credits") {
@@ -194,7 +195,7 @@ export default function CreatePage() {
     setError(null);
     setBusy(true);
     try {
-      const triggerRes = await fetch("/api/trigger-run", {
+      const triggerRes = await fetchWithTimeout("/api/trigger-run", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -204,7 +205,7 @@ export default function CreatePage() {
           razorpay_payment_id: lastPayment.response.razorpay_payment_id,
           razorpay_signature: lastPayment.response.razorpay_signature,
         }),
-      });
+      }, 30_000);
       if (!triggerRes.ok) {
         const t = await triggerRes.text();
         throw new Error(`Retry failed: ${t}`);
