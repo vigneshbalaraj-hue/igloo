@@ -1000,8 +1000,17 @@ def run_pipeline_thread(user_id: str, run_id: str, script_path: str,
     pipeline_failed_reason: str | None = None
     pipeline_failed_logs: str | None = None
 
+    # Budget for auto-retrying TTS+alignment on ALIGNMENT_POOR/FAILED from
+    # step 3. Each retry re-runs step 2 (Voiceover) then step 3. These are
+    # transient ElevenLabs-timestamp glitches; extra TTS is cheap.
+    ALIGNMENT_RETRY_BUDGET = 2
+    alignment_retries_used = 0
+
     try:
-        for step_num in steps_to_run:
+        step_idx = 0
+        while step_idx < len(steps_to_run):
+            step_num = steps_to_run[step_idx]
+            step_idx += 1
             if not state["running"]:
                 break
 
@@ -1055,8 +1064,44 @@ def run_pipeline_thread(user_id: str, run_id: str, script_path: str,
                         "name": step_name, "elapsed": round(elapsed, 1),
                         "error": f"Exit code {proc.returncode}"
                     })
-                    pipeline_failed_reason = f"step {step_num} ({step_name}) exited {proc.returncode}"
+                    # Scan recent logs for a typed ERROR_CODE: X emitted by the
+                    # step. If present, use the code as rejection_reason so the
+                    # studio UI can render a tailored message; otherwise fall
+                    # back to the generic exit-code string.
+                    error_code = None
+                    for line in reversed(state["logs"][-80:]):
+                        if "ERROR_CODE:" in line:
+                            error_code = line.split("ERROR_CODE:", 1)[1].strip().split()[0]
+                            break
+                    pipeline_failed_reason = error_code or f"step {step_num} ({step_name}) exited {proc.returncode}"
                     pipeline_failed_logs = "\n".join(state["logs"][-50:])
+
+                    # Auto-recovery: alignment glitches on step 3 are usually a
+                    # transient ElevenLabs timestamp hiccup. Re-run step 2 +
+                    # step 3 up to ALIGNMENT_RETRY_BUDGET times before giving
+                    # up. Only in auto_go mode — manual users get the gate.
+                    if (auto_go and step_num == 3
+                            and error_code in ("ALIGNMENT_POOR", "ALIGNMENT_FAILED")
+                            and alignment_retries_used < ALIGNMENT_RETRY_BUDGET):
+                        alignment_retries_used += 1
+                        broadcast_event(user_id, "log", {
+                            "text": f"[auto-retry] Alignment failed ({error_code}); "
+                                    f"re-running TTS + timestamps "
+                                    f"(attempt {alignment_retries_used}/{ALIGNMENT_RETRY_BUDGET})",
+                            "level": "warn",
+                        })
+                        pipeline_failed_reason = None
+                        pipeline_failed_logs = None
+                        # Rewind to step 2 (Voiceover). step_idx currently
+                        # points just past step 3; pull it back so the next
+                        # iteration runs step 2, then step 3 naturally.
+                        for i, s in enumerate(steps_to_run):
+                            if s == 2:
+                                step_idx = i
+                                break
+                        state["step_statuses"][2] = "pending"
+                        state["step_statuses"][3] = "pending"
+                        continue
 
                     if auto_go:
                         broadcast_event(user_id, "pipeline_error", {

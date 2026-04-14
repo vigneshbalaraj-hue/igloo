@@ -26,7 +26,7 @@ from pathlib import Path
 # Local — shared with web_app.py so the prompt bank lives in one place
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import prompt_bank as pb  # noqa: E402
-from gemini_client import call_gemini, GeminiAPIError  # noqa: E402
+from gemini_client import call_gemini, GeminiAPIError, PRO_MODEL  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -209,20 +209,34 @@ def generate_narration(theme: str, topic: str, duration: int,
             for entry in repair_log:
                 print(f"    - {entry}")
 
-        # Step 5: validate. Regenerate once if the first attempt still fails
-        # after repair. The retry prompt restates the FULL schema, not just
-        # the failures, to prevent the multi-bug cascade from session 19.
+        # Step 5: validate with bounded retry loop. 3 attempts total (initial +
+        # 2 retries). After the final attempt, hard-abort on any hard-floor or
+        # hard-ceiling failure with a typed error code that run_pipeline maps
+        # to a tailored user-facing message. Band-only failures still pass with
+        # a warning since they produce viable reels.
+        # 4 attempts total: attempts 1-2 on Flash (fast, cheap), attempts 3-4
+        # on Pro (stronger at honoring word-count constraints). Attempt 1 has
+        # already run above on Flash, so the retry loop covers 2-4.
+        MAX_ATTEMPTS = 4
         failures = pb.validate_scenes(scenes, duration, voice_id=voice_id)
-        if failures:
-            print(f"  [validator] First attempt rejected: {failures}")
-            print("  Regenerating with full schema restatement...")
+        attempt = 1
+        while failures and attempt < MAX_ATTEMPTS:
+            print(f"  [validator] Attempt {attempt} rejected: {failures}")
+            next_attempt = attempt + 1
+            use_pro = next_attempt >= 3
+            model_label = "Pro" if use_pro else "Flash"
+            print(f"  Regenerating on {model_label} "
+                  f"(attempt {next_attempt}/{MAX_ATTEMPTS})...")
             retry_prompt = pb.build_retry_prompt(
                 base_prompt=prompt,
                 failures=failures,
                 duration=duration,
                 voice_id=voice_id,
             )
-            raw = call_gemini(retry_prompt, api_key, temperature=gen_temperature)
+            raw = call_gemini(
+                retry_prompt, api_key, temperature=gen_temperature,
+                force_model=PRO_MODEL if use_pro else None,
+            )
             scenes = parse_json_response(raw)
             scenes, retry_repair_log = pb.repair_scenes(scenes)
             if retry_repair_log:
@@ -230,13 +244,23 @@ def generate_narration(theme: str, topic: str, duration: int,
                 for entry in retry_repair_log:
                     print(f"    - {entry}")
             failures = pb.validate_scenes(scenes, duration, voice_id=voice_id)
-            if failures:
-                if any("HARD CEILING" in f for f in failures):
-                    print(f"  [validator] FATAL: hard ceiling exceeded after retry: {failures}")
-                    print("  Cannot produce a reel that exceeds the duration limit. Aborting.")
-                    sys.exit(1)
-                print(f"  [validator] WARNING: still failing after retry: {failures}")
-                print("  Continuing with warnings — flag for manual review.")
+            attempt += 1
+
+        if failures:
+            # After final attempt, classify the failure. Hard floor / hard
+            # ceiling are terminal — emit a typed code for the studio UI.
+            if any("HARD CEILING" in f for f in failures):
+                print(f"  [validator] FATAL: hard ceiling exceeded after {MAX_ATTEMPTS} attempts: {failures}")
+                print("ERROR_CODE: SCRIPT_OVER_MAX", file=sys.stderr)
+                sys.exit(1)
+            if any("HARD FLOOR" in f for f in failures):
+                print(f"  [validator] FATAL: hard floor exceeded after {MAX_ATTEMPTS} attempts: {failures}")
+                print("ERROR_CODE: SCRIPT_UNDER_MIN", file=sys.stderr)
+                sys.exit(1)
+            # Band-only failures (close but not within ±15%) — viable reel,
+            # just flag for review.
+            print(f"  [validator] WARNING: band failures after {MAX_ATTEMPTS} attempts: {failures}")
+            print("  Continuing with warnings — flag for manual review.")
 
     while True:
         # Display scenes

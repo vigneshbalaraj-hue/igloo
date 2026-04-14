@@ -32,6 +32,29 @@ const STATUS_COPY: Record<Run["status"], string> = {
   failed: "Something broke on our end. We've been notified.",
 };
 
+const ERROR_CODE_COPY: Record<string, { title: string; action: string }> = {
+  SCRIPT_UNDER_MIN: {
+    title:
+      "This topic didn't produce enough material for a 30-second reel. Try a broader or more specific angle.",
+    action: "Try another topic",
+  },
+  SCRIPT_OVER_MAX: {
+    title:
+      "This topic produced too much material to fit in a 60-second reel. Try a narrower angle.",
+    action: "Try another topic",
+  },
+  ALIGNMENT_POOR: {
+    title:
+      "We couldn't match the voiceover to the captions cleanly this time. Your credit has been refunded — please try again.",
+    action: "Try again",
+  },
+  ALIGNMENT_FAILED: {
+    title:
+      "The voiceover couldn't be processed. Your credit has been refunded — please try again.",
+    action: "Try again",
+  },
+};
+
 export default function RunPage({
   params,
 }: {
@@ -134,11 +157,28 @@ export default function RunPage({
               <div className="text-lg font-medium">{run.status.replace(/_/g, " ")}</div>
               <div className="mt-3 text-neutral-400">{STATUS_COPY[run.status]}</div>
 
-              {run.rejection_reason && (
-                <div className="mt-3 text-sm text-red-300">
-                  Reason: {run.rejection_reason}
-                </div>
-              )}
+              {run.rejection_reason && (() => {
+                const code = run.rejection_reason.trim();
+                const tailored = ERROR_CODE_COPY[code];
+                if (tailored) {
+                  return (
+                    <div className="mt-4 rounded-lg bg-neutral-950 border border-neutral-800 p-4">
+                      <div className="text-neutral-200">{tailored.title}</div>
+                      <Link
+                        href="/create"
+                        className="mt-3 inline-block rounded-full bg-white text-black px-5 py-2 text-sm font-medium hover:bg-neutral-200 transition"
+                      >
+                        {tailored.action}
+                      </Link>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="mt-3 text-sm text-red-300">
+                    Reason: {run.rejection_reason}
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="mt-6 rounded-xl bg-neutral-900 border border-neutral-800 p-6">

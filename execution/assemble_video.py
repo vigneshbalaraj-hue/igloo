@@ -450,24 +450,6 @@ def build_ass_subtitles(script: dict, words: list, font_path: str, output_path: 
 
     print(f"  Emphasis words (yellow): {emphasis_words}")
 
-    # Map voiceover words to scenes based on time ranges
-    scenes_flat = []
-    for scene in script["scenes"]:
-        vg = scene.get("video_generation", {})
-        if "clips" in vg:
-            for clip in vg["clips"]:
-                scenes_flat.append({
-                    "start": clip["narration_start"],
-                    "end": clip["narration_end"],
-                    "caption": scene.get("caption_text", ""),
-                })
-        else:
-            scenes_flat.append({
-                "start": scene["narration_start"],
-                "end": scene["narration_end"],
-                "caption": scene.get("caption_text", ""),
-            })
-
     # Build subtitle events -- one per scene, with inline color for emphasis
     # ASS color format: \c&HBBGGRR& (BGR order)
     # Yellow = R:FF G:FF B:00 -> &H0000FFFF& (but in ASS override: \c&H00FFFF&)

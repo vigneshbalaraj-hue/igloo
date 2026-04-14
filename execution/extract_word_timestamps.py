@@ -13,10 +13,29 @@ Usage:
 """
 
 import argparse
+import difflib
 import json
 import re
 import sys
 from pathlib import Path
+
+
+# Fallback WPS when interpolating a missed scene's duration (default voice cadence).
+# Matches the default used in prompt_bank's per-voice calibration table.
+WPS_ESTIMATE = 2.5
+
+# Max scenes allowed to fall back to interpolation before we hard-fail the run.
+# Rationale: single miss ≈ imperceptible caption drift; 2 scenes compounds but
+# stays watchable; 3+ drifts visibly on the back half.
+MAX_INTERPOLATED_SCENES = 2
+
+
+class AlignmentQualityError(RuntimeError):
+    """Too many scenes required interpolation to align; output would drift."""
+
+
+class AlignmentHardError(RuntimeError):
+    """Whisper produced no usable word timestamps; cannot align at all."""
 
 
 def extract_words(data):
@@ -59,85 +78,121 @@ def normalize_word(w: str) -> str:
     return re.sub(r'[^a-z0-9]', '', w.lower())
 
 
+def _match_first_word(words, target_norm, start_idx, exact_window=10, fuzzy_window=30):
+    """Find the starting word index for a scene.
+
+    Returns (match_idx, mode) where mode is 'exact', 'fuzzy', or None (no match).
+    - Pass 1: exact normalized-equal scan within exact_window.
+    - Pass 2: difflib fuzzy match (ratio ≥ 0.8) within fuzzy_window.
+    """
+    total = len(words)
+    # Pass 1: exact
+    for i in range(start_idx, min(start_idx + exact_window, total)):
+        if normalize_word(words[i]["word"]) == target_norm:
+            return i, "exact"
+    # Pass 2: fuzzy
+    best_i, best_ratio = None, 0.0
+    for i in range(start_idx, min(start_idx + fuzzy_window, total)):
+        candidate = normalize_word(words[i]["word"])
+        if not candidate:
+            continue
+        ratio = difflib.SequenceMatcher(None, target_norm, candidate).ratio()
+        if ratio >= 0.8 and ratio > best_ratio:
+            best_i, best_ratio = i, ratio
+    if best_i is not None:
+        return best_i, "fuzzy"
+    return None, None
+
+
 def update_script_timestamps(script_path: Path, words: list):
-    """Match voiceover words to scenes and update narration_start/end + audio_slice."""
+    """Match voiceover words to scenes and update narration_start/end + audio_slice.
+
+    Three-pass alignment per scene: exact → fuzzy → interpolation. If more than
+    MAX_INTERPOLATED_SCENES scenes require interpolation, raises
+    AlignmentQualityError (output would visibly drift). If Whisper produced zero
+    words, raises AlignmentHardError immediately.
+    """
     with open(script_path, encoding="utf-8") as f:
         script = json.load(f)
 
-    word_idx = 0
     total_words = len(words)
+    if total_words == 0:
+        raise AlignmentHardError(
+            "Whisper returned zero word timestamps — cannot align any scene"
+        )
+
+    word_idx = 0
+    interpolated_scenes = []  # scene_ids that fell back to interpolation
+    last_end_seconds = 0.0    # for interpolation fallback
 
     for scene in script["scenes"]:
         narration = scene.get("narration_text", "")
         if not narration:
             continue
 
-        # Tokenize scene narration into words
         scene_words = narration.split()
         if not scene_words:
             continue
 
-        # Match the first word of this scene in the voiceover word list
         first_norm = normalize_word(scene_words[0])
         last_norm = normalize_word(scene_words[-1])
 
-        # Find the starting position — scan forward from current index
-        match_start = None
-        for i in range(word_idx, min(word_idx + 10, total_words)):
-            if normalize_word(words[i]["word"]) == first_norm:
-                match_start = i
-                break
+        match_start, mode = _match_first_word(words, first_norm, word_idx)
 
         if match_start is None:
-            print(f"  WARNING: Could not match scene {scene['scene_id']} "
-                  f"first word '{scene_words[0]}' in voiceover words (searched idx {word_idx}-{min(word_idx+10, total_words)})")
-            continue
+            # Pass 3: interpolate from previous scene's end using word-count estimate.
+            interpolated_scenes.append(scene["scene_id"])
+            if len(interpolated_scenes) > MAX_INTERPOLATED_SCENES:
+                raise AlignmentQualityError(
+                    f"{len(interpolated_scenes)} scenes required interpolation "
+                    f"(max {MAX_INTERPOLATED_SCENES}); caption sync would drift. "
+                    f"Interpolated scenes: {interpolated_scenes}"
+                )
+            narration_start = round(last_end_seconds, 3)
+            estimated_duration = round(len(scene_words) / WPS_ESTIMATE, 3)
+            narration_end = round(narration_start + estimated_duration, 3)
+            scene_duration = estimated_duration
+            print(f"  Scene {scene['scene_id']}: INTERPOLATED "
+                  f"{narration_start:.3f}-{narration_end:.3f} ({scene_duration:.2f}s) "
+                  f"— first word '{scene_words[0]}' not in voiceover words near idx {word_idx}")
+        else:
+            # Find ending position
+            match_end = match_start + len(scene_words) - 1
+            if match_end >= total_words:
+                match_end = total_words - 1
+            if normalize_word(words[match_end]["word"]) != last_norm:
+                for i in range(match_start + len(scene_words) - 2,
+                               min(match_start + len(scene_words) + 3, total_words)):
+                    if normalize_word(words[i]["word"]) == last_norm:
+                        match_end = i
+                        break
 
-        # Find the ending position — advance through scene words
-        match_end = match_start + len(scene_words) - 1
-        if match_end >= total_words:
-            match_end = total_words - 1
+            narration_start = round(words[match_start]["start"], 3)
+            narration_end = round(words[match_end]["end"], 3)
+            scene_duration = round(narration_end - narration_start, 3)
+            word_idx = match_end + 1
 
-        # Verify last word matches
-        if normalize_word(words[match_end]["word"]) != last_norm:
-            # Try scanning nearby for the last word
-            for i in range(match_start + len(scene_words) - 2, min(match_start + len(scene_words) + 3, total_words)):
-                if normalize_word(words[i]["word"]) == last_norm:
-                    match_end = i
-                    break
-
-        narration_start = round(words[match_start]["start"], 3)
-        narration_end = round(words[match_end]["end"], 3)
-        scene_duration = round(narration_end - narration_start, 3)
-
-        old_start = scene.get("narration_start")
-        old_end = scene.get("narration_end")
+            tag = f" [{mode}]" if mode == "fuzzy" else ""
+            print(f"  Scene {scene['scene_id']}:{tag} "
+                  f"{narration_start:.3f}-{narration_end:.3f} ({scene_duration:.2f}s)")
 
         # Update scene fields
         scene["narration_start"] = narration_start
         scene["narration_end"] = narration_end
         scene["scene_duration"] = scene_duration
+        last_end_seconds = narration_end
 
         # Update video_generation fields based on scene type
         vg = scene.get("video_generation", {})
-
-        # Dynamic kling_duration for b-roll: 10s if narration > 5s, else 5s
         if vg.get("method") == "image-to-video":
             vg["kling_duration"] = 10 if scene_duration > 5.0 else 5
-
         if vg.get("method") == "lip-sync":
             vg["audio_slice"] = [narration_start, narration_end]
             vg["kling_duration"] = f"driven by audio ({scene_duration}s)"
 
-        # Log changes
-        if old_start is not None and (abs(old_start - narration_start) > 0.01 or abs(old_end - narration_end) > 0.01):
-            print(f"  Scene {scene['scene_id']}: {old_start:.2f}-{old_end:.2f} -> {narration_start:.3f}-{narration_end:.3f} "
-                  f"(delta: {narration_start - old_start:+.3f}s start, {narration_end - old_end:+.3f}s end)")
-        else:
-            print(f"  Scene {scene['scene_id']}: {narration_start:.3f}-{narration_end:.3f} ({scene_duration:.2f}s)")
-
-        # Advance word index past this scene
-        word_idx = match_end + 1
+    if interpolated_scenes:
+        print(f"  NOTE: {len(interpolated_scenes)} scene(s) used interpolation "
+              f"(<={MAX_INTERPOLATED_SCENES} allowed): {interpolated_scenes}")
 
     # Update top-level actual_duration from last scene's end
     all_ends = [s.get("narration_end", 0) for s in script["scenes"]]
@@ -154,7 +209,7 @@ def update_script_timestamps(script_path: Path, words: list):
         vg = scene.get("video_generation", {})
         if "clips" in vg:
             clips = vg["clips"]
-            scene_start = scene["narration_start"]
+            scene_start = scene.get("narration_start", 0.0)
 
             # Match each sub-clip's narration text to word timestamps
             clip_word_idx = 0
@@ -240,7 +295,16 @@ def main():
             print(f"ERROR: Script not found: {script_path}", file=sys.stderr)
             sys.exit(1)
         print(f"\nUpdating script timestamps from actual voiceover...")
-        update_script_timestamps(script_path, words)
+        try:
+            update_script_timestamps(script_path, words)
+        except AlignmentQualityError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            print("ERROR_CODE: ALIGNMENT_POOR", file=sys.stderr)
+            sys.exit(1)
+        except AlignmentHardError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            print("ERROR_CODE: ALIGNMENT_FAILED", file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":

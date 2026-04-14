@@ -45,6 +45,10 @@ WPS_BAND = 0.15  # ±15% around target word count
 # MAX_DURATION_1X = 60 produces a ≤50s delivered reel.
 MAX_DURATION_1X = 60
 
+# Hard floor: no reel may fall below this 1x duration. At 1.2x final speed,
+# MIN_DURATION_1X = 36 produces a ≥30s delivered reel (the product minimum).
+MIN_DURATION_1X = 36
+
 # Built-in niches in prompt_bank.md (order matches Part 2 sections)
 BUILTIN_NICHES = ["spirituality", "fitness", "finance", "parenting", "wellness"]
 
@@ -783,6 +787,15 @@ def validate_scenes(scenes: list, duration: int,
         failures.append(
             f"HARD CEILING EXCEEDED: {word_count} words > absolute max "
             f"{hard_max} (max {MAX_DURATION_1X}s @ {wps:.2f} wps)"
+        )
+
+    # Hard floor — no script may fall below the absolute min. Prevents reels
+    # from ever delivering below 30s at 1.2x (product contract).
+    hard_min = int(round(MIN_DURATION_1X * wps))
+    if word_count < hard_min:
+        failures.append(
+            f"HARD FLOOR EXCEEDED: {word_count} words < absolute min "
+            f"{hard_min} (min {MIN_DURATION_1X}s @ {wps:.2f} wps)"
         )
 
     # AI-tell scan
