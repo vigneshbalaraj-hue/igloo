@@ -539,7 +539,18 @@ def main():
         script = json.load(f)
 
     api_key = load_env("ELEVENLABS_API_KEY")
-    voice_id = load_env("ELEVENLABS_VOICE_ID")
+    # Prefer voice_id baked into the script (set by wizard or select_voice.py)
+    # over env var. The env var is process-wide on Fly and leaks across runs
+    # when a prior run wrote it via select_voice.update_env() — that caused the
+    # s48 migraine reel to ship with a stale male voice over a female anchor.
+    script_voice_id = (script.get("anchor_character", {})
+                             .get("voice", {}).get("elevenlabs_voice_id")
+                       or script.get("audio", {})
+                                .get("voice_over", {}).get("voice_id"))
+    voice_id = script_voice_id or load_env("ELEVENLABS_VOICE_ID")
+    if not voice_id:
+        print("ERROR: no voice_id in script and ELEVENLABS_VOICE_ID not set", file=sys.stderr)
+        sys.exit(1)
     output_dir = script_path.parent
 
     if args.single:

@@ -1019,6 +1019,19 @@ def api_assemble_script():
         raw = call_gemini(prompt, api_key, temperature=0.3,
                           max_tokens=16384, timeout=120)
         script_json = extract_json_from_text(raw)
+
+        # Re-inject the wizard-selected voice_id. ASSEMBLY_PROMPT explicitly
+        # tells Gemini to exclude elevenlabs_voice_id, so it gets stripped even
+        # though the wizard set it on the incoming character. Without this,
+        # generate_voiceover.py falls back to a stale env var on Fly (see s49
+        # migraine reel: female anchor, male voice).
+        wizard_voice_id = (character.get("voice", {}) or {}).get("elevenlabs_voice_id")
+        if wizard_voice_id:
+            script_json.setdefault("anchor_character", {}).setdefault("voice", {})
+            script_json["anchor_character"]["voice"]["elevenlabs_voice_id"] = wizard_voice_id
+            script_json.setdefault("audio", {}).setdefault("voice_over", {})
+            script_json["audio"]["voice_over"]["voice_id"] = wizard_voice_id
+
         return jsonify({"script": script_json})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1595,6 +1608,20 @@ def api_edit_script():
         raw = call_gemini(prompt, api_key, temperature=0.3,
                           max_tokens=16384, timeout=120)
         edited = extract_json_from_text(raw)
+
+        # Preserve the pre-edit voice_id — Gemini can silently drop it even
+        # though the prompt says "maintain required fields". Same hazard as
+        # api_assemble_script.
+        prior_voice_id = (script.get("anchor_character", {})
+                                .get("voice", {}).get("elevenlabs_voice_id")
+                          or script.get("audio", {})
+                                   .get("voice_over", {}).get("voice_id"))
+        if prior_voice_id:
+            edited.setdefault("anchor_character", {}).setdefault("voice", {})
+            edited["anchor_character"]["voice"]["elevenlabs_voice_id"] = prior_voice_id
+            edited.setdefault("audio", {}).setdefault("voice_over", {})
+            edited["audio"]["voice_over"]["voice_id"] = prior_voice_id
+
         return jsonify({"script": edited})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

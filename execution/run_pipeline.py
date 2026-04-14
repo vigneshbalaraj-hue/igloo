@@ -238,9 +238,22 @@ def _build_cmd_step1(ctx: dict) -> list[str]:
 
 
 def _skip_step1(ctx: dict) -> str | None:
-    vid = load_env_value("ELEVENLABS_VOICE_ID")
-    if vid:
-        return f"ELEVENLABS_VOICE_ID already set ({vid[:8]}...)"
+    # Only skip if the CURRENT script already carries a voice_id. The env var
+    # alone is not trustworthy on Fly — select_voice.update_env() writes a
+    # shared .env file that leaks across runs and users (caused the s49
+    # migraine reel: stale env voice_id overrode a female anchor).
+    try:
+        import json as _json
+        with open(ctx["script_path"], encoding="utf-8") as _f:
+            _script = _json.load(_f)
+        script_vid = (_script.get("anchor_character", {})
+                             .get("voice", {}).get("elevenlabs_voice_id")
+                      or _script.get("audio", {})
+                                .get("voice_over", {}).get("voice_id"))
+    except (OSError, ValueError, KeyError):
+        script_vid = None
+    if script_vid:
+        return f"voice_id baked into script ({script_vid[:8]}...)"
     return None
 
 
