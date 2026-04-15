@@ -21,9 +21,23 @@ export default async function AdminQueuePage() {
   return (
     <main className="flex-1 px-6 py-12">
       <div className="mx-auto max-w-4xl">
-        <h1 className="text-3xl font-semibold tracking-tight mb-2">
-          Review queue
-        </h1>
+        <div className="flex items-start justify-between mb-2 gap-4">
+          <h1 className="text-3xl font-semibold tracking-tight">Review queue</h1>
+          <div className="flex gap-4 text-sm pt-2">
+            <Link href="/admin/metrics" className="text-neutral-400 hover:text-neutral-200">
+              Metrics
+            </Link>
+            <Link href="/admin/feedback" className="text-neutral-400 hover:text-neutral-200">
+              Feedback
+            </Link>
+            <Link href="/admin/waitlist" className="text-neutral-400 hover:text-neutral-200">
+              Waitlist
+            </Link>
+            <Link href="/admin/alerts" className="text-neutral-400 hover:text-neutral-200">
+              Alerts
+            </Link>
+          </div>
+        </div>
         <p className="text-neutral-400 mb-8">
           Reels awaiting your call. Newest first.
         </p>

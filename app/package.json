@@ -11,6 +11,7 @@
   "dependencies": {
     "@clerk/nextjs": "^7.0.11",
     "@supabase/supabase-js": "^2.102.1",
+    "@vercel/analytics": "^2.0.1",
     "next": "16.2.2",
     "razorpay": "^2.9.6",
     "react": "19.2.4",
