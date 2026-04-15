@@ -46,7 +46,7 @@ from flask import (
 # Local — shared with generate_script.py
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import prompt_bank as pb  # noqa: E402
-from gemini_client import call_gemini  # noqa: E402
+from gemini_client import call_gemini, call_gemini_json, GeminiJSONError, PRO_MODEL  # noqa: E402
 from select_voice import build_voice_profile, search_shared_voices, rank_with_gemini  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -595,6 +595,28 @@ def extract_json_from_text(text: str):
         raise ValueError(f"Could not extract JSON from response")
 
 
+def _first_empty_narration(scenes) -> int | None:
+    """Return 1-based index of first scene whose narration_text is missing
+    or whitespace-only, else None. Used to detect Gemini content drift in
+    the three endpoints that edit/assemble scripts. A blank narration would
+    render as empty quotes in the wizard and crash voiceover downstream."""
+    if not isinstance(scenes, list):
+        return None
+    for i, s in enumerate(scenes, 1):
+        if not isinstance(s, dict):
+            continue
+        nt = s.get("narration_text")
+        if not isinstance(nt, str) or not nt.strip():
+            return i
+    return None
+
+
+_EMPTY_NARRATION_NUDGE = (
+    "\n\nCRITICAL: every scene MUST have a non-empty narration_text. "
+    "Do not return any scene with blank narration."
+)
+
+
 def slugify(text: str) -> str:
     text = text.lower().strip()
     text = re.sub(r'[^a-z0-9\s-]', '', text)
@@ -903,9 +925,19 @@ def api_edit_narration():
     try:
         prompt = NARRATION_EDIT_PROMPT.format(
             current_script=json.dumps(scenes, indent=2), feedback=feedback)
-        raw = call_gemini(prompt, api_key, temperature=0.5)
-        scenes = extract_json_from_text(raw)
-        return jsonify({"scenes": scenes})
+        scenes_out = call_gemini_json(prompt, api_key, temperature=0.5)
+        # Content-drift guard: Gemini sometimes returns a scene with blank
+        # narration_text (HTTP 200 + valid JSON, just missing content).
+        # One retry with a stern nudge — the call_gemini_json cycle itself
+        # already escalates Flash→Pro internally on its final attempt.
+        if _first_empty_narration(scenes_out) is not None:
+            scenes_out = call_gemini_json(
+                prompt + _EMPTY_NARRATION_NUDGE, api_key, temperature=0.3)
+            if _first_empty_narration(scenes_out) is not None:
+                return jsonify({"error": "The AI missed a scene — please try again."}), 502
+        return jsonify({"scenes": scenes_out})
+    except GeminiJSONError:
+        return jsonify({"error": "We couldn't understand the AI's response. Please try again."}), 502
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -926,9 +958,10 @@ def api_generate_characters():
         narration = " ".join(s.get("narration_text", "") for s in scenes)
         prompt = CHARACTER_PROMPT.format(
             theme=theme, topic=topic, narration=narration)
-        raw = call_gemini(prompt, api_key, temperature=0.7)
-        options = extract_json_from_text(raw)
+        options = call_gemini_json(prompt, api_key, temperature=0.7)
         return jsonify({"characters": options})
+    except GeminiJSONError:
+        return jsonify({"error": "We couldn't understand the AI's response. Please try again."}), 502
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -946,9 +979,10 @@ def api_custom_character():
 
     try:
         prompt = CHARACTER_CUSTOM_PROMPT.format(description=description, topic=topic)
-        raw = call_gemini(prompt, api_key, temperature=0.5)
-        character = extract_json_from_text(raw)
+        character = call_gemini_json(prompt, api_key, temperature=0.5)
         return jsonify({"character": character})
+    except GeminiJSONError:
+        return jsonify({"error": "We couldn't understand the AI's response. Please try again."}), 502
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1019,6 +1053,17 @@ def api_assemble_script():
         raw = call_gemini(prompt, api_key, temperature=0.3,
                           max_tokens=16384, timeout=120)
         script_json = extract_json_from_text(raw)
+
+        # Content-drift guard: if Flash returned a scene with blank
+        # narration_text, retry once forced to Pro. Flash already drifted,
+        # so another Flash pass has low expected value.
+        if _first_empty_narration(script_json.get("scenes")) is not None:
+            raw = call_gemini(prompt + _EMPTY_NARRATION_NUDGE, api_key,
+                              temperature=0.3, max_tokens=16384,
+                              timeout=120, force_model=PRO_MODEL)
+            script_json = extract_json_from_text(raw)
+            if _first_empty_narration(script_json.get("scenes")) is not None:
+                return jsonify({"error": "The AI missed a scene — please try again."}), 502
 
         # Re-inject the wizard-selected voice_id. ASSEMBLY_PROMPT explicitly
         # tells Gemini to exclude elevenlabs_voice_id, so it gets stripped even
@@ -1608,6 +1653,16 @@ def api_edit_script():
         raw = call_gemini(prompt, api_key, temperature=0.3,
                           max_tokens=16384, timeout=120)
         edited = extract_json_from_text(raw)
+
+        # Content-drift guard: retry once forced to Pro if Flash emitted a
+        # blank narration_text on any scene. Same pattern as api_assemble_script.
+        if _first_empty_narration(edited.get("scenes")) is not None:
+            raw = call_gemini(prompt + _EMPTY_NARRATION_NUDGE, api_key,
+                              temperature=0.3, max_tokens=16384,
+                              timeout=120, force_model=PRO_MODEL)
+            edited = extract_json_from_text(raw)
+            if _first_empty_narration(edited.get("scenes")) is not None:
+                return jsonify({"error": "The AI missed a scene — please try again."}), 502
 
         # Preserve the pre-edit voice_id — Gemini can silently drop it even
         # though the prompt says "maintain required fields". Same hazard as

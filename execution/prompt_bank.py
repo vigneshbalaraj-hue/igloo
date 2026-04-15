@@ -736,6 +736,13 @@ def validate_scenes(scenes: list, duration: int,
                 f"Scene {scene.get('scene_id', i)} missing/typo'd fields: "
                 f"{sorted(missing)} (got: {sorted(scene.keys())})"
             )
+        # Key present but value blank is the same class of Gemini drift as
+        # a missing key — downstream voiceover/slicing assumes non-empty.
+        narration = scene.get("narration_text")
+        if isinstance(narration, str) and not narration.strip():
+            failures.append(
+                f"Scene {scene.get('scene_id', i)} has empty narration_text"
+            )
         if scene.get("type") not in VALID_TYPES:
             failures.append(
                 f"Scene {scene.get('scene_id', i)} has invalid type: "

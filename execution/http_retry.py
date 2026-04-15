@@ -30,7 +30,17 @@ class RetryExhaustedError(Exception):
         self.attempts = attempts
 
 
+class TransientUpstreamError(Exception):
+    """Raise from inside a retry_with_backoff body to force a retry on a
+    response that was HTTP 200 but semantically empty/unusable — e.g. Imagen
+    returning `predictions: []` when the safety filter silently drops a prompt.
+    These cases never raise an HTTPError so the default _is_retryable wouldn't
+    catch them."""
+
+
 def _is_retryable(exc: BaseException) -> bool:
+    if isinstance(exc, TransientUpstreamError):
+        return True
     if isinstance(exc, urllib.error.HTTPError):
         return exc.code == 429 or 500 <= exc.code < 600
     if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError)):

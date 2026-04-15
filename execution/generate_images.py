@@ -51,7 +51,7 @@ def load_env(key: str) -> str:
 
 def generate_image(prompt: str, api_key: str, aspect_ratio: str = "9:16") -> bytes:
     """Call Imagen 3 API and return PNG bytes. Retries 3x on 5xx/429/timeouts."""
-    from http_retry import retry_with_backoff
+    from http_retry import retry_with_backoff, TransientUpstreamError
 
     payload = {
         "instances": [{"prompt": prompt}],
@@ -69,7 +69,7 @@ def generate_image(prompt: str, api_key: str, aspect_ratio: str = "9:16") -> byt
         req.add_header("Content-Type", "application/json")
         try:
             with urllib.request.urlopen(req, timeout=120) as resp:
-                return json.loads(resp.read().decode())
+                result = json.loads(resp.read().decode())
         except urllib.error.HTTPError as e:
             error_body = ""
             try:
@@ -78,12 +78,18 @@ def generate_image(prompt: str, api_key: str, aspect_ratio: str = "9:16") -> byt
                 pass
             print(f"  ERROR {e.code}: {error_body[:500]}", file=sys.stderr)
             raise
+        # Imagen silent-safety-filter: HTTP 200 with empty predictions.
+        # Raise inside _do_call so retry_with_backoff actually retries — a
+        # second attempt sometimes passes the filter.
+        predictions = result.get("predictions", [])
+        if not predictions:
+            raise TransientUpstreamError(
+                f"No predictions returned. Response: {json.dumps(result)[:300]}"
+            )
+        return result
 
     result = retry_with_backoff(_do_call, label="imagen")
-
-    predictions = result.get("predictions", [])
-    if not predictions:
-        raise RuntimeError(f"No predictions returned. Response: {json.dumps(result)[:300]}")
+    predictions = result["predictions"]
 
     image_b64 = predictions[0].get("bytesBase64Encoded", "")
     if not image_b64:

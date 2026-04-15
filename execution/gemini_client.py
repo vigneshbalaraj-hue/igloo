@@ -5,6 +5,7 @@ All call sites across the codebase should import from here:
 """
 
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -142,4 +143,77 @@ def call_gemini(prompt: str, api_key: str, temperature: float = 0.5,
     raise GeminiAPIError(
         f"Gemini API failed: both {FLASH_MODEL} (6 attempts) and "
         f"{PRO_MODEL} (3 attempts) exhausted",
+    )
+
+
+class GeminiJSONError(Exception):
+    """Raised when Gemini returns 200 OK but the response can't be parsed as JSON
+    after `attempts` tries. Separate from GeminiAPIError (HTTP failures) so
+    callers can show users a parse-specific friendly message."""
+
+
+def _extract_json(text: str):
+    """Pull a JSON object/array out of a Gemini text response.
+
+    Handles three shapes Gemini tends to emit:
+      1. ```json ... ``` fenced block
+      2. Raw JSON with no fencing
+      3. JSON embedded in prose — grabs the outermost {...} or [...]
+    Raises json.JSONDecodeError / ValueError on unrecoverable junk.
+    """
+    if "```" in text:
+        blocks = text.split("```")
+        for block in blocks[1::2]:
+            cleaned = block.strip()
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:].strip()
+            try:
+                return json.loads(cleaned)
+            except json.JSONDecodeError:
+                continue
+    try:
+        return json.loads(text.strip())
+    except json.JSONDecodeError:
+        match = re.search(r'(\{[\s\S]*\}|\[[\s\S]*\])', text.strip())
+        if match:
+            return json.loads(match.group(1))
+        raise ValueError("Could not extract JSON from response")
+
+
+def call_gemini_json(prompt: str, api_key: str, temperature: float = 0.5,
+                     max_tokens: int = 8192, timeout: int = 90,
+                     attempts: int = 3):
+    """Call Gemini and parse the response as JSON, retrying on parse failure.
+
+    Gemini occasionally returns 200 OK with malformed JSON (missing comma,
+    trailing comma, unescaped newline in a string). Plain call_gemini has no
+    notion of parse success, so one bad roll leaks a raw JSONDecodeError to
+    the user. This helper retries the whole call up to `attempts` times; the
+    final attempt escalates to Pro (more reliable, more expensive) to give
+    the best shot before giving up.
+
+    Raises GeminiJSONError on final failure (caller should show a friendly
+    message — not the underlying parse error).
+    """
+    last_parse_err: Exception | None = None
+    for i in range(attempts):
+        force = PRO_MODEL if i == attempts - 1 else None
+        raw = call_gemini(
+            prompt, api_key,
+            temperature=temperature, max_tokens=max_tokens, timeout=timeout,
+            force_model=force,
+        )
+        try:
+            return _extract_json(raw)
+        except (json.JSONDecodeError, ValueError) as e:
+            last_parse_err = e
+            print(
+                f"  [gemini-json] attempt {i + 1}/{attempts} parse failed "
+                f"({type(e).__name__}: {e}); "
+                f"{'escalating to Pro' if i == attempts - 2 else 'retrying'}",
+                file=sys.stderr,
+            )
+    raise GeminiJSONError(
+        f"Gemini returned unparseable JSON after {attempts} attempts: "
+        f"{last_parse_err}"
     )

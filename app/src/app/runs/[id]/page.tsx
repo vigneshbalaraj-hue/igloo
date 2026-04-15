@@ -53,6 +53,31 @@ const ERROR_CODE_COPY: Record<string, { title: string; action: string }> = {
       "The voiceover couldn't be processed. Your credit has been refunded — please try again.",
     action: "Try again",
   },
+  IMAGEN_FAILED: {
+    title:
+      "We couldn't generate the presenter image — the AI image model declined the prompt. Your credit has been refunded. Please try a different topic.",
+    action: "Try another topic",
+  },
+  TTS_FAILED: {
+    title:
+      "The voiceover couldn't be generated. Your credit has been refunded — please try again.",
+    action: "Try again",
+  },
+  KLING_FAILED: {
+    title:
+      "One of the video clips failed to generate. Your credit has been refunded — please try again.",
+    action: "Try again",
+  },
+  MUSIC_FAILED: {
+    title:
+      "The background music couldn't be generated. Your credit has been refunded — please try again.",
+    action: "Try again",
+  },
+  FFMPEG_TIMEOUT: {
+    title:
+      "Video assembly took too long and timed out. Your credit has been refunded — please try again.",
+    action: "Try again",
+  },
 };
 
 export default function RunPage({

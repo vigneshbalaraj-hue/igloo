@@ -1347,14 +1347,15 @@
             } else {
               showView('error');
               document.getElementById('error-message').textContent =
-                data.error || 'Pipeline finished with errors. Check logs for details.';
+                friendlyErrorMessage(data.error) ||
+                'Pipeline finished with errors. Check logs for details.';
             }
             break;
           case 'pipeline_error':
             if (eventSource) eventSource.close();
             showView('error');
             document.getElementById('error-message').textContent =
-              data.error || 'An unexpected error occurred.';
+              friendlyErrorMessage(data.error) || 'An unexpected error occurred.';
             break;
           case 'ping':
             break;
@@ -1365,48 +1366,44 @@
       };
     }
 
-    // ═══════════════ RETRY / START OVER ═══════════════
-    async function retryPipeline() {
-      if (!state.savedPath) { startOver(); return; }
-      try {
-        const launchResp = await apiPost('/api/pipeline/start', {
-          script_path: state.savedPath,
-          speed: 1.3,
-          audio_mode: 'option-c',
-          no_captions: false,
-          start_from: 1,
-          auto_go: true,
-          music_volume: 0.10,
-          voice_volume: 1.5,
-        });
-        if (launchResp.status === 'queued') {
-          showQueue(launchResp.queue_position);
-        } else {
-          showView('progress');
-          state.pipelineStartTime = Date.now();
-          document.getElementById('phase-text').textContent = 'Retrying...';
-          document.getElementById('progress-fill').style.width = '0%';
-          connectSSE();
-        }
-      } catch (e) {
-        showView('error');
-        document.getElementById('error-message').textContent = e.message;
+    // ═══════════════ ERROR MESSAGE MAPPING ═══════════════
+    // Raw ERROR_CODE strings from the pipeline are developer-facing.
+    // Map them to plain English before rendering. The run's credit has
+    // already been auto-refunded by this point (per s41 behavior), so
+    // it's safe to tell the user so.
+    function friendlyErrorMessage(raw) {
+      if (!raw) return '';
+      const s = String(raw);
+      if (s.includes('IMAGEN_FAILED')) {
+        return "We couldn't generate the presenter image — the AI image model declined the prompt. Your credit has been refunded. Please try a different topic.";
       }
+      if (s.includes('TTS_FAILED')) {
+        return "The voiceover couldn't be generated. Your credit has been refunded — please try again.";
+      }
+      if (s.includes('KLING_FAILED')) {
+        return "One of the video clips failed to generate. Your credit has been refunded — please try again.";
+      }
+      if (s.includes('MUSIC_FAILED')) {
+        return "The background music couldn't be generated. Your credit has been refunded — please try again.";
+      }
+      if (s.includes('FFMPEG_TIMEOUT')) {
+        return "Video assembly took too long and timed out. Your credit has been refunded — please try again.";
+      }
+      return s;
+    }
+
+    // ═══════════════ RETRY / START OVER ═══════════════
+    // Both buttons redirect to the gate (igloo.video). The studio's Flask
+    // session still holds the failed run_id, which try_acquire_slot will
+    // reject as "not acquirable" — so re-running inside the studio can't
+    // work. Sending users back to the gate lets them redeem their
+    // refunded credit, which mints a fresh draft + new studio token.
+    function retryPipeline() {
+      window.location.href = IGLOO_APP_URL || '/';
     }
 
     function startOver() {
-      if (eventSource) eventSource.close();
-      state.scenes = [];
-      state.characters = [];
-      state.selectedCharacter = null;
-      state.fullScript = null;
-      state.savedPath = null;
-      document.getElementById('inp-theme').value = '';
-      document.getElementById('inp-topic').value = '';
-      document.getElementById('inp-duration').value = '40';
-      document.getElementById('inp-script').value = '';
-      showView('create');
-      showStep(1);
+      window.location.href = IGLOO_APP_URL || '/';
     }
   </script>
 </body>
