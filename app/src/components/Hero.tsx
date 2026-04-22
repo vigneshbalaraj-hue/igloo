@@ -86,9 +86,7 @@ export default function Hero() {
         </div>
 
         <p className="mt-6 text-sm text-foreground/50">
-          2 videos for <span className="text-foreground font-medium">$14.99</span>{" "}
-          <span className="text-foreground/50">·</span>{" "}
-          or <span className="text-foreground/70">$9.99</span> each
+          Limited beta slots
         </p>
       </div>
     </section>

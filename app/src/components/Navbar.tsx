@@ -22,8 +22,8 @@ export default function Navbar() {
             <a href="#features" className="transition-colors duration-300 hover:text-foreground">
               Features
             </a>
-            <a href="#pricing" className="transition-colors duration-300 hover:text-foreground">
-              Pricing
+            <a href="#showcase" className="transition-colors duration-300 hover:text-foreground">
+              Showcase
             </a>
           </div>
 
@@ -78,7 +78,7 @@ export default function Navbar() {
           open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
         }`}
       >
-        {["How it works", "Features", "Pricing"].map((label, i) => (
+        {["How it works", "Features", "Showcase"].map((label, i) => (
           <a
             key={label}
             href={`#${label.toLowerCase().replace(/ /g, "-")}`}

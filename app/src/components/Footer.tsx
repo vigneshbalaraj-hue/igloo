@@ -14,7 +14,7 @@ export default function Footer() {
         <div className="flex items-center gap-6 text-xs text-text-muted">
           <a href="#how-it-works" className="hover:text-foreground transition-colors duration-300">How it works</a>
           <a href="#features" className="hover:text-foreground transition-colors duration-300">Features</a>
-          <a href="#pricing" className="hover:text-foreground transition-colors duration-300">Pricing</a>
+          <a href="#showcase" className="hover:text-foreground transition-colors duration-300">Showcase</a>
           <a href="https://www.instagram.com/igloo.video/" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors duration-300" aria-label="Instagram">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
