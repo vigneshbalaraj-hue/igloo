@@ -11,7 +11,7 @@ const isPublicRoute = createRouteMatcher([
   "/contact",
   "/api/razorpay/webhook",      // Razorpay → us, no Clerk session
   "/api/clerk-webhook",         // Clerk → us, validated by svix signature
-  "/api/internal/send-drip",    // pg_cron → us, validated by shared secret
+  "/api/internal(.*)",          // pg_cron + DB triggers → us, validated by shared secret
   "/unsubscribe(.*)",           // unsubscribe via token, no Clerk session
 ]);
 
