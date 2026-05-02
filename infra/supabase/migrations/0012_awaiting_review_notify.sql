@@ -9,10 +9,12 @@
 -- but defense in depth).
 --
 -- Secret handling: the shared secret (same as INTERNAL_DRIP_SECRET) is
--- read from a database-level config parameter `app.internal_drip_secret`.
--- That parameter is NOT set by this migration — see deploy notes for the
--- one-shot ALTER DATABASE command to set it without committing the
--- secret to git.
+-- read from Supabase Vault under the name 'internal_drip_secret'. That
+-- secret is NOT created by this migration — see deploy notes for the
+-- one-shot vault.create_secret() call (so the secret never lands in
+-- git via the migration file).
+-- Vault is chosen over ALTER DATABASE SET because Supabase's postgres
+-- role lacks superuser privileges to set database parameters.
 --
 -- Idempotent: safe to re-run. The trigger and function are dropped and
 -- recreated; the column add is IF NOT EXISTS.
@@ -28,9 +30,9 @@ ALTER TABLE public.runs
 -- ============================================================
 -- B. Trigger function
 --   Fires only on the specific transition into 'awaiting_review'.
---   Reads the shared secret from a session/database setting so we
---   don't have to hardcode it in the function body (which would put
---   it in git via this migration).
+--   Reads the shared secret from Supabase Vault so we don't have to
+--   hardcode it in the function body (which would put it in git via
+--   this migration).
 -- ============================================================
 CREATE OR REPLACE FUNCTION public.notify_awaiting_review_trigger()
 RETURNS TRIGGER AS $$
@@ -50,11 +52,14 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  -- Read shared secret. The 'true' arg = "missing_ok" — return NULL
-  -- if not set, so we don't error out the UPDATE that triggered us.
-  v_secret := current_setting('app.internal_drip_secret', true);
+  -- Read shared secret from Supabase Vault. Returns NULL if missing.
+  SELECT decrypted_secret INTO v_secret
+    FROM vault.decrypted_secrets
+    WHERE name = 'internal_drip_secret'
+    LIMIT 1;
+
   IF v_secret IS NULL OR length(v_secret) = 0 THEN
-    RAISE WARNING '[notify_awaiting_review] app.internal_drip_secret is not configured; skipping HTTP call';
+    RAISE WARNING '[notify_awaiting_review] vault secret internal_drip_secret missing; skipping HTTP call';
     RETURN NEW;
   END IF;
 
