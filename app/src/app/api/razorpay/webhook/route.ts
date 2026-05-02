@@ -89,6 +89,7 @@ export async function POST(req: NextRequest) {
   const clerkUserId = payment.notes?.clerk_user_id;
   const topic = payment.notes?.topic;
   const tier = (payment.notes?.tier ?? "single") as PricingTier;
+  const promoId = payment.notes?.promo_id ?? null;
   const email = payment.email;
 
   if (!clerkUserId || !topic) {
@@ -115,6 +116,7 @@ export async function POST(req: NextRequest) {
     razorpay_signature: null,
     amount_paise: payment.amount,
     tier,
+    promo_id: promoId,
     source: "webhook",
   });
 

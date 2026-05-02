@@ -46,6 +46,7 @@ export async function POST(req: NextRequest) {
     razorpay_order_id?: string;
     razorpay_payment_id?: string;
     razorpay_signature?: string;
+    promo_id?: string | null;
   };
   try {
     body = await req.json();
@@ -59,6 +60,7 @@ export async function POST(req: NextRequest) {
     razorpay_order_id,
     razorpay_payment_id,
     razorpay_signature,
+    promo_id,
   } = body;
   const tier = (rawTier === "double" ? "double" : "single") as PricingTier;
 
@@ -78,6 +80,7 @@ export async function POST(req: NextRequest) {
     razorpay_payment_id,
     razorpay_signature,
     tier,
+    promo_id: promo_id ?? null,
     source: "client",
   });
 

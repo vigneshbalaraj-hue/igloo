@@ -9,8 +9,10 @@ const isPublicRoute = createRouteMatcher([
   "/terms",
   "/refund",
   "/contact",
-  "/api/razorpay/webhook", // Razorpay → us, no Clerk session
-  "/api/clerk-webhook",    // Clerk → us, validated by svix signature
+  "/api/razorpay/webhook",      // Razorpay → us, no Clerk session
+  "/api/clerk-webhook",         // Clerk → us, validated by svix signature
+  "/api/internal/send-drip",    // pg_cron → us, validated by shared secret
+  "/unsubscribe(.*)",           // unsubscribe via token, no Clerk session
 ]);
 
 export default clerkMiddleware(async (auth, req) => {

@@ -1,10 +1,31 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useUser } from "@clerk/nextjs";
 import { PRICING_TIERS } from "@/lib/pricing";
 import type { PricingTier } from "@/lib/pricing";
 import { fetchWithTimeout } from "@/lib/fetch-timeout";
+
+const PROMO_ENABLED = process.env.NEXT_PUBLIC_PROMO_CODES_ENABLED === "true";
+
+type AppliedPromo = {
+  code: string;
+  promoId: string;
+  discountPct: number;
+  originalPaise: number;
+  discountedPaise: number;
+};
+
+const PROMO_ERROR_COPY: Record<string, string> = {
+  invalid_code: "We don't recognise that code.",
+  expired: "That code has expired.",
+  wrong_tier: "That code only applies to a different reel pack — try the other one.",
+  already_used: "You've already used this code.",
+  cap_reached: "That code is fully redeemed.",
+  inactive: "That code isn't currently active.",
+  promo_disabled: "Promo codes are off right now.",
+  promo_validation_failed: "Couldn't check that code — please try again.",
+};
 
 type RazorpayHandlerResponse = {
   razorpay_order_id: string;
@@ -56,7 +77,13 @@ export default function CreatePage() {
   const [error, setError] = useState<string | null>(null);
   const [creditBalance, setCreditBalance] = useState<number | null>(null);
   const [betaAllowed, setBetaAllowed] = useState<boolean | null>(null);
-  const [lastPayment, setLastPayment] = useState<{ response: RazorpayHandlerResponse; topic: string; tier: PricingTier } | null>(null);
+  const [lastPayment, setLastPayment] = useState<{ response: RazorpayHandlerResponse; topic: string; tier: PricingTier; promoId: string | null } | null>(null);
+
+  const [promoCodeInput, setPromoCodeInput] = useState("");
+  const [promoApplying, setPromoApplying] = useState(false);
+  const [promoError, setPromoError] = useState<string | null>(null);
+  const [appliedPromo, setAppliedPromo] = useState<AppliedPromo | null>(null);
+  const autoAppliedRef = useRef(false);
 
   // Fetch credit balance + beta status on mount
   useEffect(() => {
@@ -74,6 +101,67 @@ export default function CreatePage() {
         setBetaAllowed(false);
       });
   }, [isLoaded, user]);
+
+  // Read ?promo= URL param and pre-fill the input. Auto-apply once user is loaded.
+  useEffect(() => {
+    if (!PROMO_ENABLED) return;
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("promo");
+    if (code && !promoCodeInput) {
+      setPromoCodeInput(code.toUpperCase());
+    }
+  }, [promoCodeInput]);
+
+  // Auto-apply once user session is ready and we have a pre-filled code from URL.
+  useEffect(() => {
+    if (!PROMO_ENABLED) return;
+    if (autoAppliedRef.current) return;
+    if (!isLoaded || !user) return;
+    if (!promoCodeInput || appliedPromo) return;
+    autoAppliedRef.current = true;
+    void applyPromo(promoCodeInput, tier);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoaded, user, promoCodeInput]);
+
+  // Tier changed after a promo was applied — clear applied promo so user
+  // re-applies if it still qualifies for the new tier.
+  useEffect(() => {
+    if (appliedPromo && appliedPromo.code) {
+      setAppliedPromo(null);
+      setPromoError(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tier]);
+
+  async function applyPromo(code: string, t: PricingTier) {
+    setPromoError(null);
+    setPromoApplying(true);
+    try {
+      const res = await fetchWithTimeout("/api/razorpay/promo-preview", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: code.trim(), tier: t }),
+      }, 15_000);
+      const data = await res.json().catch(() => ({}));
+      if (data.ok === true) {
+        setAppliedPromo({
+          code: data.code,
+          promoId: data.promo_id,
+          discountPct: data.discount_pct,
+          originalPaise: data.original_amount_paise,
+          discountedPaise: data.discounted_amount_paise,
+        });
+      } else {
+        const reason = (data.error as string) ?? "promo_validation_failed";
+        setPromoError(PROMO_ERROR_COPY[reason] ?? "Couldn't apply that code.");
+      }
+    } catch {
+      setPromoError("Couldn't reach the server. Try again.");
+    } finally {
+      setPromoApplying(false);
+    }
+  }
 
   async function handleBuy() {
     setError(null);
@@ -97,13 +185,17 @@ export default function CreatePage() {
       const orderRes = await fetchWithTimeout("/api/razorpay/order", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ topic, tier }),
+        body: JSON.stringify({
+          topic,
+          tier,
+          promoCode: appliedPromo?.code ?? undefined,
+        }),
       }, 30_000);
       if (!orderRes.ok) {
         const t = await orderRes.text();
         throw new Error(`Order create failed: ${t}`);
       }
-      const { orderId, amount, currency, keyId } = await orderRes.json();
+      const { orderId, amount, currency, keyId, promoId } = await orderRes.json();
 
       // 2. Open Razorpay checkout
       await new Promise<void>((resolve, reject) => {
@@ -120,7 +212,7 @@ export default function CreatePage() {
           },
           theme: { color: "#0a0a0a" },
           handler: async (response: RazorpayHandlerResponse) => {
-            setLastPayment({ response, topic, tier });
+            setLastPayment({ response, topic, tier, promoId: promoId ?? null });
             try {
               const triggerRes = await fetchWithTimeout("/api/trigger-run", {
                 method: "POST",
@@ -131,6 +223,7 @@ export default function CreatePage() {
                   razorpay_order_id: response.razorpay_order_id,
                   razorpay_payment_id: response.razorpay_payment_id,
                   razorpay_signature: response.razorpay_signature,
+                  promo_id: promoId ?? null,
                 }),
               }, 30_000);
               if (!triggerRes.ok) {
@@ -204,6 +297,7 @@ export default function CreatePage() {
           razorpay_order_id: lastPayment.response.razorpay_order_id,
           razorpay_payment_id: lastPayment.response.razorpay_payment_id,
           razorpay_signature: lastPayment.response.razorpay_signature,
+          promo_id: lastPayment.promoId,
         }),
       }, 30_000);
       if (!triggerRes.ok) {
@@ -371,6 +465,66 @@ export default function CreatePage() {
           </div>
         )}
 
+        {/* Promo code input — only when feature flag on */}
+        {PROMO_ENABLED && (
+          <div className="mt-6">
+            {appliedPromo ? (
+              <div className="rounded-xl border border-amber-700/50 bg-amber-950/30 px-4 py-3 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-amber-200">
+                    Code <span className="font-mono">{appliedPromo.code}</span> applied
+                  </p>
+                  <p className="text-xs text-amber-300/70 mt-0.5">
+                    {appliedPromo.discountPct}% off — ₹{(appliedPromo.discountedPaise / 100).toFixed(0)}{" "}
+                    <span className="line-through text-neutral-500 ml-1">₹{(appliedPromo.originalPaise / 100).toFixed(0)}</span>
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAppliedPromo(null);
+                    setPromoCodeInput("");
+                    setPromoError(null);
+                  }}
+                  className="text-xs text-amber-300/70 hover:text-amber-200 transition"
+                >
+                  Remove
+                </button>
+              </div>
+            ) : (
+              <>
+                <label className="block text-xs uppercase tracking-wider text-neutral-500 mb-2">
+                  Promo code
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={promoCodeInput}
+                    onChange={(e) => {
+                      setPromoCodeInput(e.target.value.toUpperCase());
+                      setPromoError(null);
+                    }}
+                    placeholder="e.g. IGLOO50"
+                    className="flex-1 rounded-lg bg-neutral-900 border border-neutral-800 px-3 py-2.5 text-sm font-mono uppercase focus:outline-none focus:ring-2 focus:ring-white/30"
+                    disabled={promoApplying || busy}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => applyPromo(promoCodeInput, tier)}
+                    disabled={!promoCodeInput.trim() || promoApplying || busy}
+                    className="rounded-lg bg-neutral-800 hover:bg-neutral-700 px-4 py-2.5 text-sm font-medium transition disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {promoApplying ? "Checking…" : "Apply"}
+                  </button>
+                </div>
+                {promoError && (
+                  <p className="mt-2 text-xs text-red-400">{promoError}</p>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
         <button
           onClick={handleBuy}
           disabled={busy}
@@ -378,6 +532,8 @@ export default function CreatePage() {
         >
           {busy
             ? "Working…"
+            : appliedPromo
+            ? `Buy ${PRICING_TIERS[tier].label} — ₹${(appliedPromo.discountedPaise / 100).toFixed(0)} (${appliedPromo.discountPct}% off)`
             : `Buy ${PRICING_TIERS[tier].label} — $${PRICING_TIERS[tier].display_usd}`}
         </button>
       </div>

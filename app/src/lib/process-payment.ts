@@ -32,6 +32,7 @@ export type ProcessPaymentInput = {
   razorpay_signature: string | null; // null when called from webhook
   amount_paise?: number;
   tier?: PricingTier;
+  promo_id?: string | null;          // set when this payment used a promo code
   source: "client" | "webhook";
 };
 
@@ -132,6 +133,34 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
       created: false,
       studio_url: buildStudioUrl(existingRun.id, dbUser.id),
     };
+  }
+
+  // 3b. If this payment used a promo code, record the redemption.
+  //     Idempotent on payment_id; safe to call on webhook replays.
+  if (input.promo_id) {
+    try {
+      const { data: redemptionResult, error: redemptionError } = await supabase.rpc(
+        "record_promo_redemption",
+        {
+          p_promo_id: input.promo_id,
+          p_user_id: dbUser.id,
+          p_payment_id: payment.id,
+        }
+      );
+      if (redemptionError) {
+        console.error("[processPayment] record_promo_redemption RPC error", redemptionError);
+        logPaymentAlert(supabase, input, "promo_redemption_rpc_error", String(redemptionError.message));
+      } else if (redemptionResult && (redemptionResult as { ok?: boolean }).ok === false) {
+        // Race or invalid promo at capture time — payment proceeds, alert raised.
+        const errCode = (redemptionResult as { error?: string }).error ?? "unknown";
+        console.warn("[processPayment] promo redemption rejected", { promo_id: input.promo_id, error: errCode });
+        logPaymentAlert(supabase, input, "promo_redemption_rejected", errCode);
+      }
+    } catch (e) {
+      console.error("[processPayment] record_promo_redemption threw", e);
+      logPaymentAlert(supabase, input, "promo_redemption_threw", String(e));
+      // Don't fail the payment over a redemption-recording bug.
+    }
   }
 
   // 4. Insert credit GRANT for this payment.
