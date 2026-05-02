@@ -504,7 +504,7 @@ export default function CreatePage() {
                       setPromoCodeInput(e.target.value.toUpperCase());
                       setPromoError(null);
                     }}
-                    placeholder="e.g. IGLOO50"
+                    placeholder="Have a code?"
                     className="flex-1 rounded-lg bg-neutral-900 border border-neutral-800 px-3 py-2.5 text-sm font-mono uppercase focus:outline-none focus:ring-2 focus:ring-white/30"
                     disabled={promoApplying || busy}
                   />
